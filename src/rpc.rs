@@ -12,6 +12,8 @@
 //! the new ID in the response header. Callers must store this ID and re-issue
 //! the command. This module surfaces rotation via `RpcError::SessionRotated`.
 
+use std::time::Duration;
+
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 
@@ -133,7 +135,10 @@ async fn post_rpc(
     method: &str,
     arguments: Option<serde_json::Value>,
 ) -> Result<RpcResponse, RpcError> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_default();
     let body = RpcRequest { method, arguments };
 
     let mut req = client
@@ -147,21 +152,37 @@ async fn post_rpc(
         req = req.basic_auth(user, Option::<&str>::None);
     }
 
-    let resp = req.send().await.map_err(|e| RpcError::ConnectionError(e.to_string()))?;
+    tracing::debug!(
+        %url, %method, %session_id,
+        has_auth = credentials.username.is_some(),
+        "Sending RPC request"
+    );
 
-    match resp.status().as_u16() {
+    let resp = req.send().await.map_err(|e| {
+        tracing::error!(error = %e, %url, %method, "RPC transport error (is the daemon running?)");
+        RpcError::ConnectionError(e.to_string())
+    })?;
+
+    let status = resp.status().as_u16();
+    tracing::debug!(%url, %method, status, "RPC response received");
+
+    match status {
         409 => {
             let new_id = extract_session_id(resp.headers())
                 .unwrap_or_default()
                 .to_owned();
+            tracing::debug!(%url, old_id = %session_id, new_id = %new_id, "Session ID rotated (409)");
             Err(RpcError::SessionRotated(new_id))
         }
-        401 => Err(RpcError::AuthError),
+        401 => {
+            tracing::error!(%url, "RPC authentication failed (401) — check username/password");
+            Err(RpcError::AuthError)
+        }
         _ => {
-            let body: RpcResponse = resp
-                .json()
-                .await
-                .map_err(|e| RpcError::ParseError(e.to_string()))?;
+            let body: RpcResponse = resp.json().await.map_err(|e| {
+                tracing::error!(error = %e, %url, %method, "Failed to parse RPC response body");
+                RpcError::ParseError(e.to_string())
+            })?;
             Ok(body)
         }
     }
@@ -199,14 +220,31 @@ pub async fn session_get(
     credentials: &TransmissionCredentials,
     session_id: &str,
 ) -> Result<SessionInfo, RpcError> {
+    tracing::debug!(%url, "Probing daemon with session-get");
     match post_rpc(url, credentials, session_id, "session-get", None).await {
-        Ok(_) => Ok(SessionInfo { session_id: session_id.to_owned() }),
-        Err(RpcError::SessionRotated(new_id)) => {
-            // Retry with the fresh session id.
-            post_rpc(url, credentials, &new_id, "session-get", None).await?;
-            Ok(SessionInfo { session_id: new_id })
+        Ok(_) => {
+            tracing::info!(%url, %session_id, "session-get probe succeeded");
+            Ok(SessionInfo {
+                session_id: session_id.to_owned(),
+            })
         }
-        Err(e) => Err(e),
+        Err(RpcError::SessionRotated(new_id)) => {
+            tracing::debug!(%url, new_id = %new_id, "Session ID rotated during probe, retrying once");
+            match post_rpc(url, credentials, &new_id, "session-get", None).await {
+                Ok(_) => {
+                    tracing::info!(%url, session_id = %new_id, "session-get probe succeeded after session rotation");
+                    Ok(SessionInfo { session_id: new_id })
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, %url, "session-get retry failed after session rotation");
+                    Err(e)
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!(error = %e, %url, "session-get probe failed");
+            Err(e)
+        }
     }
 }
 
@@ -231,6 +269,7 @@ pub async fn torrent_get(
     credentials: &TransmissionCredentials,
     session_id: &str,
 ) -> Result<Vec<TorrentData>, RpcError> {
+    tracing::debug!(%url, %session_id, "Fetching torrent list");
     let args = serde_json::json!({
         "fields": ["id", "name", "status", "percentDone"]
     });
@@ -238,8 +277,15 @@ pub async fn torrent_get(
     let resp = post_rpc(url, credentials, session_id, "torrent-get", Some(args)).await?;
 
     let torrents: Vec<TorrentData> = serde_json::from_value(resp.arguments["torrents"].clone())
-        .map_err(|e| RpcError::ParseError(e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to deserialize torrent list from response");
+            RpcError::ParseError(e.to_string())
+        })?;
 
+    tracing::debug!(
+        count = torrents.len(),
+        "torrent-get deserialized successfully"
+    );
     Ok(torrents)
 }
 
@@ -269,8 +315,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/transmission/rpc"))
             .respond_with(
-                ResponseTemplate::new(409)
-                    .insert_header(SESSION_ID_HEADER, "new-session-id"),
+                ResponseTemplate::new(409).insert_header(SESSION_ID_HEADER, "new-session-id"),
             )
             .mount(&server)
             .await;
@@ -316,10 +361,7 @@ mod tests {
         // First request → 409
         Mock::given(method("POST"))
             .and(path("/transmission/rpc"))
-            .respond_with(
-                ResponseTemplate::new(409)
-                    .insert_header(SESSION_ID_HEADER, "rotated-id"),
-            )
+            .respond_with(ResponseTemplate::new(409).insert_header(SESSION_ID_HEADER, "rotated-id"))
             .up_to_n_times(1)
             .mount(&server)
             .await;
@@ -376,17 +418,15 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/transmission/rpc"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "result": "success",
-                    "arguments": {
-                        "torrents": [
-                            { "id": 1, "name": "Ubuntu ISO", "status": 6, "percentDone": 1.0 },
-                            { "id": 2, "name": "Arch Linux", "status": 4, "percentDone": 0.43 }
-                        ]
-                    }
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": "success",
+                "arguments": {
+                    "torrents": [
+                        { "id": 1, "name": "Ubuntu ISO", "status": 6, "percentDone": 1.0 },
+                        { "id": 2, "name": "Arch Linux", "status": 4, "percentDone": 0.43 }
+                    ]
+                }
+            })))
             .mount(&server)
             .await;
 
@@ -408,14 +448,12 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/transmission/rpc"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "result": "success",
-                    "arguments": {
-                        "torrents": [{ "unexpected_field": true }]
-                    }
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": "success",
+                "arguments": {
+                    "torrents": [{ "unexpected_field": true }]
+                }
+            })))
             .mount(&server)
             .await;
 

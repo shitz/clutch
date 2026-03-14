@@ -2,7 +2,7 @@
 //!
 //! # Architecture
 //!
-//! The app follows `iced`'s Elm architecture with free-function style (iced 0.13):
+//! The app follows `iced`'s Elm architecture with free-function style (iced 0.14):
 //!
 //! ```text
 //! view(&State) → Element → user interaction → Message
@@ -49,7 +49,6 @@ pub enum Screen {
 #[derive(Debug, Clone)]
 pub enum Message {
     // -- Connection screen events --
-
     /// User edited the Host field.
     HostChanged(String),
     /// User edited the Port field.
@@ -64,7 +63,6 @@ pub enum Message {
     SessionProbeResult(Result<crate::rpc::SessionInfo, String>),
 
     // -- Main screen events --
-
     /// Fired by the polling subscription every 5 seconds.
     Tick,
     /// Result of a `torrent-get` RPC call. `Ok` carries the fresh torrent list;
@@ -73,6 +71,10 @@ pub enum Message {
     /// The daemon returned 409, meaning the session ID has rotated.
     /// The `String` is the new session ID. Re-fires the pending `torrent-get`.
     SessionIdRotated(String),
+
+    /// User clicked the Disconnect button on the main screen.
+    /// Returns the app to the connection form.
+    Disconnect,
 }
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -105,6 +107,13 @@ impl AppState {
 /// mutates in-memory state or delegates to a [`Screen`] method that itself
 /// returns immediately. All async work is encapsulated in the returned `Task`.
 pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
+    // Disconnect is screen-agnostic; handle it before dispatching.
+    if let Message::Disconnect = &message {
+        tracing::info!("Disconnecting from daemon, returning to connection screen");
+        state.screen = Screen::Connection(ConnectionScreen::new());
+        return Task::none();
+    }
+
     match &mut state.screen {
         Screen::Connection(conn) => {
             let (task, next_screen) = conn.update(message);

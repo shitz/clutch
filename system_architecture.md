@@ -1,111 +1,286 @@
-# Project Specification & Architecture: Clutch - A Transmission Remote GUI in Rust
+# Project Specification & Architecture: Clutch — A Transmission Remote GUI in Rust
 
 ## 1. Project Overview
 
-A cross-platform (Windows, macOS, Linux) desktop application built in pure Rust. The application serves as a remote GUI for a Transmission BitTorrent daemon, communicating exclusively via the Transmission JSON-RPC API. It utilizes the `iced` GUI framework, adhering strictly to the Elm architecture (Model, View, Update).
+A cross-platform (Windows, macOS, Linux) desktop application built in pure Rust. The application
+serves as a remote GUI for a Transmission BitTorrent daemon, communicating exclusively via the
+Transmission JSON-RPC API. It uses the `iced` 0.14 GUI framework and follows the Elm architecture
+(Model / View / Update) using iced's free-function style.
 
-## 2. Core Specification
-
-### Functional Requirements
-
-- **Connection Management:** Configure and connect to a remote Transmission daemon (Host, Port, RPC Path, Username, Password). Handle the `X-Transmission-Session-Id` header lifecycle.
-- **Torrent Management:**
-  - **Add:** Support adding torrents via local `.torrent` files (Base64 encoded) and Magnet links.
-  - **Delete:** Remove torrents (with the option to delete local data).
-  - **Update/Control:** Pause, resume, and verify local data for selected torrents.
-- **Master-Detail User Interface:**
-  - **Master View (List):** A scrollable list displaying active and inactive torrents. Columns must include: Name, Status (Downloading, Seeding, Paused), Progress (%), Download Speed, Upload Speed, Seeders, and Leechers.
-  - **Detail View (Inspector):** A panel that appears when a torrent is selected, showing comprehensive details (trackers, peers, file lists, exact downloaded sizes, ETA).
-
-### Non-Functional Requirements
-
-- **Performance:** UI must remain responsive at 60fps. Networking and disk I/O must not block the main UI thread.
-- **Cross-Platform:** Must compile natively for Windows, macOS, and Linux without relying on heavy C-bindings (like GTK) or web views.
-
-## 3. System Architecture
-
-The application will follow `iced`'s Elm-inspired architecture, neatly separating the state, the presentation, and the background asynchronous tasks.
-
-### 3.1 The Elm Loop (`iced::Application`)
-
-1.  **State (Model):** A single source of truth containing the list of torrents, connection settings, UI state (selected torrent), and network loading statuses.
-2.  **View:** A pure function that takes the current State and returns an `iced::Element` (the widget tree). It maps user interactions (clicks, text input) to `Message`s.
-3.  **Message:** An `enum` defining every possible event in the application (e.g., `Tick`, `TorrentSelected`, `AddTorrent`, `RpcResponseReceived`).
-4.  **Update:** A function that takes the current State and a Message, mutates the State accordingly, and optionally returns a `Command` (an asynchronous side effect, like making an HTTP request).
-
-### 3.2 Concurrency & Background Polling
-
-To keep the data fresh without freezing the UI, the app will use `iced::Subscription` and async `Command`s:
-
-- **Polling Subscription:** An `iced::time::every` subscription will emit a `Message::Tick` every 1-2 seconds.
-- **RPC Dispatcher:** When `Update` receives a `Tick`, it returns an asynchronous `Command` that uses `reqwest` to fetch `torrent-get` from the daemon.
-- **State Reconciliation:** Once the async `Command` resolves, it yields a `Message::TorrentsUpdated(Vec<Torrent>)`, which the `Update` function uses to seamlessly overwrite or patch the local state.
+**Current status: v0.1 "Living List" — shipped and working against a real Transmission daemon.**
 
 ---
 
-## 4. Core Data Models
+## 2. Core Non-Functional Constraints
 
-### The Application State
+These constraints are fixed across all versions and must never be violated:
+
+| Constraint               | Rule                                                                                                |
+| ------------------------ | --------------------------------------------------------------------------------------------------- |
+| **Non-blocking UI**      | `update()` must return in microseconds. All I/O lives inside `Task::perform()`.                     |
+| **Single RPC in-flight** | A new poll is not started until the previous one resolves (`is_loading` guard).                     |
+| **Screen-safe state**    | Torrent data is only accessible when `Screen::Main` is active — illegal states are unrepresentable. |
+| **Cross-platform**       | No GTK, no web views. Pure Rust dependencies only.                                                  |
+
+---
+
+## 3. Implemented Architecture (v0.1)
+
+### 3.1 Module Layout
+
+```
+src/
+├── main.rs               Entry point. Initialises tracing, launches iced.
+├── app.rs                AppState, Screen router, Message enum, top-level update/view/subscription.
+├── rpc.rs                Async Transmission JSON-RPC client.
+└── screens/
+    ├── mod.rs
+    ├── connection.rs     Connection form screen.
+    └── main_screen.rs    Torrent list screen.
+```
+
+### 3.2 Elm Loop (iced 0.14 free-function style)
+
+iced 0.14 uses free functions instead of the `Application` trait. The entry point wires them together:
 
 ```rust
-struct AppState {
-    // Daemon connection details
-    credentials: TransmissionCredentials,
+iced::application(AppState::new, update, view)
+    .title("Clutch")
+    .subscription(subscription)
+    .run()
+```
 
-    // Core Data
-    torrents: HashMap<i64, TorrentData>,
+| Elm role          | Implementation                                                   |
+| ----------------- | ---------------------------------------------------------------- |
+| **Model**         | `AppState { screen: Screen }`                                    |
+| **View**          | `fn view(state: &AppState) -> Element<'_, Message>`              |
+| **Update**        | `fn update(state: &mut AppState, msg: Message) -> Task<Message>` |
+| **Effects**       | `Task<Message>` (replaces iced 0.13's `Command`)                 |
+| **Subscriptions** | `fn subscription(state: &AppState) -> Subscription<Message>`     |
 
-    // UI State
-    selected_torrent_id: Option<i64>,
-    is_loading: bool,
-    error_message: Option<String>,
+### 3.3 Screen Router
+
+Routing is done via a discriminated enum. Only one screen exists at a time and its type guarantees
+which state fields are accessible:
+
+```rust
+pub enum Screen {
+    Connection(ConnectionScreen),   // Shown at startup and after Disconnect
+    Main(MainScreen),               // Shown after a successful session-get probe
+}
+
+pub struct AppState {
+    pub screen: Screen,
 }
 ```
 
-### The Message Enum
+`update()` dispatches `Message::Disconnect` before the screen match (it is screen-agnostic), then
+delegates all other messages to the active screen's own `update()` method.
+
+### 3.4 Connection Screen (`screens/connection.rs`)
+
+Responsible for:
+
+- Presenting a host / port / username / password form (password field masked with `.secure(true)`).
+- Firing a `session-get` probe via `Task::perform()` when "Connect" is clicked.
+- Transitioning to `Screen::Main` on success, or showing an inline error on failure.
+- Returning `(Task<Message>, Option<Screen>)` from `update()` — the `Option<Screen>` signals a
+  screen transition to `app::update()` without taking a reference to the outer state.
+
+State transitions:
+
+```
+Idle ──[ConnectClicked]──▶ Connecting
+                                │
+            ┌───────────────────┴──────────────────┐
+            ▼                                       ▼
+   SessionProbeResult(Ok)             SessionProbeResult(Err)
+            │                                       │
+            ▼                                       ▼
+    → Screen::Main                       Idle (inline error)
+```
+
+### 3.5 Main Screen (`screens/main_screen.rs`)
+
+Responsible for:
+
+- Displaying a sticky column header + scrollable torrent rows (Name / Status / Progress).
+- Polling the daemon every 5 seconds via an `iced::time::every` subscription.
+- Guarding against concurrent RPC calls with an `is_loading` boolean flag.
+- Handling session-id rotation transparently (409 → `SessionIdRotated` → retry).
+- Providing a toolbar with a **Disconnect** button that routes back to `Screen::Connection`.
+
+Layout uses `FillPortion` weights for columns (Name: 5, Status: 2, Progress: 3). Long torrent names
+use `text::Wrapping::WordOrGlyph` to prevent overflow into adjacent columns.
+
+Polling state machine:
+
+```
+Idle ──[Tick]──▶ Loading (is_loading = true)
+                     │
+     ┌───────────────┴──────────────────────────┐
+     ▼                                           ▼
+TorrentsUpdated(Ok)                    TorrentsUpdated(Err)
+     │                                           │
+     ▼                                           ▼
+Idle, list replaced                   Idle, error shown
+     ▲
+     │ (409 mid-flight)
+SessionIdRotated ──▶ retry torrent-get with new session id
+```
+
+### 3.6 RPC Client (`rpc.rs`)
+
+All functions are `async` and designed to be called exclusively from `Task::perform()`.
+
+| Function                                         | Description                                                                                          |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `post_rpc(url, creds, session_id, method, args)` | Single HTTP POST with a 10 s timeout. Returns `Err(SessionRotated)` on 409, `Err(AuthError)` on 401. |
+| `session_get(url, creds, session_id)`            | Connectivity probe. Handles one automatic session rotation. Returns `SessionInfo { session_id }`.    |
+| `torrent_get(url, creds, session_id)`            | Fetches the full torrent list (`id`, `name`, `status`, `percentDone`).                               |
+
+**Session-Id lifecycle:** Transmission uses `X-Transmission-Session-Id` as a lightweight CSRF
+token. On startup (or after rotation) the daemon returns 409 with the new ID in a response header.
+`session_get` retries once automatically; `torrent_get` surfaces `RpcError::SessionRotated(new_id)`
+to the caller, which maps it to `Message::SessionIdRotated` for the main screen to handle.
+
+**Timeout:** `reqwest::Client` is built with a 10 s timeout so a non-responding daemon surfaces an
+error quickly rather than hanging indefinitely.
+
+### 3.7 Data Models
 
 ```rust
-#[derive(Debug, Clone)]
-enum Message {
-    // UI Events
-    TorrentSelected(i64),
-    PauseTorrentClicked(i64),
-    ResumeTorrentClicked(i64),
-    AddTorrentFile,
-    AddMagnetLink(String),
+// Credentials passed to every RPC call
+pub struct TransmissionCredentials {
+    pub host: String,
+    pub port: u16,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
 
-    // Background / Time Events
-    Tick(std::time::Instant),
-
-    // Async Results from RPC Calls
-    RpcTorrentsFetched(Result<Vec<TorrentData>, RpcError>),
-    RpcActionCompleted(Result<(), RpcError>),
-    FileSelected(Option<std::path::PathBuf>),
+// One row in the torrent list
+pub struct TorrentData {
+    pub id: i64,
+    pub name: String,
+    pub status: i32,       // 0=Stopped 1=QueueCheck 2=Checking 3=QueueDL 4=DL 5=QueueSeed 6=Seeding
+    pub percent_done: f64, // [0.0, 1.0]
 }
 ```
 
-## 5. UI Layout Structure (The View)
+### 3.8 Message Enum (implemented)
 
-Because iced does not have a native, complex data grid with resizable columns out-of-the-box, the Master list will be constructed using a Scrollable containing a Column of Rows.
+```rust
+pub enum Message {
+    // Connection screen
+    HostChanged(String),
+    PortChanged(String),
+    UsernameChanged(String),
+    PasswordChanged(String),
+    ConnectClicked,
+    SessionProbeResult(Result<SessionInfo, String>),
 
-- Main Window: A standard vertical Column.
-- Top Bar (Toolbar): A Row containing buttons for Add, Pause, Resume, Delete, and Settings.
-- Center Area (Splitter):
-  - Master (Top 60%): A Scrollable. The first Row acts as the header (Name, Size, Progress, etc.). Subsequent Rows represent individual torrents, mapped from the torrents HashMap. Clicking a row emits Message::TorrentSelected(id).
-  - Detail (Bottom 40%): A conditional rendering block. If selected_torrent_id is Some(id), display a tabbed interface (using a row of buttons to toggle active views) showing General Info, Trackers, Peers, and Files.
+    // Main screen
+    Tick,
+    TorrentsUpdated(Result<Vec<TorrentData>, String>),
+    SessionIdRotated(String),
 
-## 6. Recommended Crate Stack
+    // Screen-agnostic
+    Disconnect,
+}
+```
 
-To fulfill this specification in pure Rust, include the following in your Cargo.toml:
+### 3.9 Observability
 
-- iced: The core GUI framework (enable features: tokio, canvas, image).
+Structured logging via `tracing` 0.1 + `tracing-subscriber` 0.3. Initialised in `main()` via
+`tracing_subscriber::fmt::init()`. Run with `RUST_LOG=clutch=debug` for full RPC traces.
 
-- tokio: For the underlying asynchronous runtime.
+| Level    | Examples                                                                                                            |
+| -------- | ------------------------------------------------------------------------------------------------------------------- |
+| `error!` | Transport failures, auth errors (401), JSON parse errors                                                            |
+| `info!`  | Connect attempted/succeeded, disconnect, torrent list refreshed                                                     |
+| `debug!` | Every outgoing request (url, method, session_id), every response status, session rotation details, tick guard skips |
 
-- reqwest: For making HTTP POST requests to the Transmission RPC endpoint. Enable the json feature.
+### 3.10 Crate Stack (current)
 
-- serde & serde_json: For defining structs that map to Transmission's RPC payloads and responses.
+| Crate                  | Version | Purpose                                               |
+| ---------------------- | ------- | ----------------------------------------------------- |
+| `iced`                 | 0.14    | GUI framework (features: `tokio`, `canvas`, `image`)  |
+| `tokio`                | 1       | Async runtime (via iced's built-in integration)       |
+| `reqwest`              | 0.12    | HTTP client for RPC calls (feature: `json`)           |
+| `serde` + `serde_json` | 1       | RPC payload serialization / deserialization           |
+| `tracing`              | 0.1     | Structured logging instrumentation                    |
+| `tracing-subscriber`   | 0.3     | Log formatting and `RUST_LOG` env-filter              |
+| `wiremock` _(dev)_     | 0.6     | In-process HTTP mock server for RPC integration tests |
 
-- rfd (Rust File Dialog): A 100% pure Rust file dialog crate for the "Add .torrent File" feature.
+### 3.11 Test Coverage
 
-- base64: For encoding the .torrent file contents before sending them to the daemon.
+14 tests, all passing. Two layers:
+
+- **Unit tests** (`screens/connection.rs`, `screens/main_screen.rs`): exercise `update()` logic
+  entirely in-memory, no async I/O.
+- **Integration tests** (`rpc.rs`): use `wiremock` to stand up a real in-process HTTP server and
+  verify the full RPC round-trip including 409 rotation, 401 auth errors, parse errors, and happy
+  paths.
+
+---
+
+## 4. Roadmap
+
+Each milestone is a vertical slice: the app remains shippable after every version.
+
+### v0.2 — Torrent Control
+
+Wire up the toolbar buttons that are currently rendered but disabled.
+
+- `torrent-start` / `torrent-stop` RPC calls mapped to Pause / Resume buttons.
+- `torrent-remove` (with `delete-local-data` flag) mapped to Delete button.
+- Torrent selection: clicking a row highlights it and enables the relevant toolbar buttons.
+  Selection state lives in `MainScreen` as `selected_id: Option<i64>`.
+- Optimistic UI: button fires immediately, list refreshes once the action RPC completes.
+- New messages: `PauseClicked`, `ResumeClicked`, `DeleteClicked(bool)`, `ActionCompleted(Result<(), String>)`.
+
+### v0.3 — Add Torrents
+
+Allow users to add new torrents to the daemon.
+
+- **Magnet links:** A text input in the toolbar accepts a magnet URI; submitting fires `torrent-add`
+  with the `filename` field.
+- **`.torrent` files:** A file-picker button (via `rfd` — pure-Rust native dialog) reads the file,
+  Base64-encodes it, and passes it to `torrent-add` via the `metainfo` field.
+- New crates: `rfd` (file dialog), `base64` (encoding).
+- New message: `AddMagnetSubmitted(String)`, `TorrentFileSelected(Option<PathBuf>)`,
+  `AddCompleted(Result<(), String>)`.
+
+### v0.4 — Detail Inspector
+
+A detail panel that slides in below the list when a torrent is selected.
+
+- Split the main area: list occupies ~60%, inspector ~40% (proportions configurable later).
+- Inspector tabs (row of toggle buttons): **General**, **Files**, **Trackers**, **Peers**.
+- **General:** name, total size, downloaded, uploaded, ratio, ETA, download/upload speeds.
+- **Files:** a scrollable list of files with per-file progress bars.
+- **Trackers:** URL, seeder count, leecher count, last announce time.
+- **Peers:** IP, client string, upload/download rate contribution.
+- New RPC field requests: `totalSize`, `downloadedEver`, `uploadedEver`, `uploadRatio`, `eta`,
+  `rateDownload`, `rateUpload`, `files`, `fileStats`, `trackerStats`, `peers`.
+- Polling interval drops to **2 s** now that the panel shows live transfer speeds.
+
+### v0.5 — Extended Torrent List Columns
+
+Expand the list view with additional columns visible in v0.4's data.
+
+- New columns: Size, Downloaded, ↓ Speed, ↑ Speed, ETA, Ratio.
+- Column visibility toggle (a settings popover or context menu).
+- Column sort: clicking a header sorts ascending/descending.
+
+### v1.0 — Polish & Settings
+
+- **Settings persistence:** Save connection profiles and UI preferences to a config file (via
+  `directories` + `toml` or `serde_json`).
+- **Multiple connection profiles:** A dropdown on the connection screen to select saved daemons.
+- **Polling interval:** Configurable (1–30 s) with a sensible default of 2 s.
+- **Theme:** Light / dark mode toggle via iced's built-in theme system.
+- **Error recovery:** Automatic reconnect with exponential back-off when the daemon becomes
+  unreachable while the main screen is active.
+- **CI:** GitHub Actions workflow running `cargo test` + `cargo clippy -- -D warnings` on
+  push to main for Linux, macOS, and Windows.

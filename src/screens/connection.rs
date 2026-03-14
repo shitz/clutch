@@ -62,8 +62,16 @@ impl ConnectionScreen {
         Some(TransmissionCredentials {
             host: self.host.clone(),
             port,
-            username: if self.username.is_empty() { None } else { Some(self.username.clone()) },
-            password: if self.password.is_empty() { None } else { Some(self.password.clone()) },
+            username: if self.username.is_empty() {
+                None
+            } else {
+                Some(self.username.clone())
+            },
+            password: if self.password.is_empty() {
+                None
+            } else {
+                Some(self.password.clone())
+            },
         })
     }
 
@@ -86,12 +94,9 @@ impl ConnectionScreen {
 
         let form = column![
             text("Connect to Transmission").size(20),
-            text_input("Host", &self.host)
-                .on_input(Message::HostChanged),
-            text_input("Port", &self.port)
-                .on_input(Message::PortChanged),
-            text_input("Username (optional)", &self.username)
-                .on_input(Message::UsernameChanged),
+            text_input("Host", &self.host).on_input(Message::HostChanged),
+            text_input("Port", &self.port).on_input(Message::PortChanged),
+            text_input("Username (optional)", &self.username).on_input(Message::UsernameChanged),
             text_input("Password (optional)", &self.password)
                 .on_input(Message::PasswordChanged)
                 .secure(true),
@@ -116,10 +121,22 @@ impl ConnectionScreen {
     /// async work is in the returned `Task`.
     pub fn update(&mut self, message: Message) -> (Task<Message>, Option<Screen>) {
         match message {
-            Message::HostChanged(v) => { self.host = v; (Task::none(), None) }
-            Message::PortChanged(v) => { self.port = v; (Task::none(), None) }
-            Message::UsernameChanged(v) => { self.username = v; (Task::none(), None) }
-            Message::PasswordChanged(v) => { self.password = v; (Task::none(), None) }
+            Message::HostChanged(v) => {
+                self.host = v;
+                (Task::none(), None)
+            }
+            Message::PortChanged(v) => {
+                self.port = v;
+                (Task::none(), None)
+            }
+            Message::UsernameChanged(v) => {
+                self.username = v;
+                (Task::none(), None)
+            }
+            Message::PasswordChanged(v) => {
+                self.password = v;
+                (Task::none(), None)
+            }
 
             Message::ConnectClicked => {
                 let Some(creds) = self.credentials() else {
@@ -129,6 +146,8 @@ impl ConnectionScreen {
                 self.is_connecting = true;
                 self.error = None;
                 let url = creds.rpc_url();
+                tracing::info!(host = %creds.host, port = creds.port, %url, "Attempting connection to daemon");
+                tracing::debug!(%url, has_auth = creds.username.is_some(), "Initiating session-get probe");
                 let task = Task::perform(
                     async move {
                         crate::rpc::session_get(&url, &creds, "")
@@ -141,15 +160,17 @@ impl ConnectionScreen {
             }
 
             Message::SessionProbeResult(Ok(info)) => {
+                tracing::info!(session_id = %info.session_id, "Connection successful");
                 let creds = self.credentials().expect("credentials valid after probe");
-                let next_screen = Screen::Main(
-                    crate::screens::main_screen::MainScreen::new(creds, info.session_id),
-                );
+                let next_screen = Screen::Main(crate::screens::main_screen::MainScreen::new(
+                    creds,
+                    info.session_id,
+                ));
                 (Task::none(), Some(next_screen))
             }
 
             Message::SessionProbeResult(Err(err)) => {
-                eprintln!("Connection failed: {err}");
+                tracing::error!(error = %err, "Connection failed");
                 self.is_connecting = false;
                 self.error = Some(err);
                 (Task::none(), None)
@@ -186,9 +207,9 @@ mod tests {
         let mut conn = ConnectionScreen::new();
         conn.is_connecting = true;
 
-        let (_, next) = conn.update(
-            Message::SessionProbeResult(Err("connection refused".to_owned())),
-        );
+        let (_, next) = conn.update(Message::SessionProbeResult(Err(
+            "connection refused".to_owned()
+        )));
 
         assert!(!conn.is_connecting);
         assert_eq!(conn.error.as_deref(), Some("connection refused"));

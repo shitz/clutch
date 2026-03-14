@@ -60,8 +60,8 @@
 
 ## 8. Manual Integration Testing
 
-- [ ] 8.1 Run the app against a real Transmission daemon; verify the connection screen pre-fills defaults and Connect transitions to the torrent list
-- [ ] 8.2 Verify the list auto-refreshes every 5 seconds with updated torrent data
-- [ ] 8.3 Test connection failure (wrong port): verify error appears on the connection screen with fields intact and Connect button re-enabled
-- [ ] 8.4 Test auth failure (wrong credentials): verify a distinct "authentication failed" error message appears
-- [ ] 8.5 Run with a large torrent list (20+ torrents) and confirm the header stays sticky while scrolling
+- [x] 8.1 Run the app against a real Transmission daemon; verify the connection screen pre-fills defaults and Connect transitions to the torrent list
+- [x] 8.2 Verify the list auto-refreshes every 5 seconds with updated torrent data
+- [x] 8.3 Test connection failure (wrong port): verify error appears on the connection screen with fields intact and Connect button re-enabled
+- [x] 8.4 Test auth failure (wrong credentials): verify a distinct "authentication failed" error message appears
+- [x] 8.5 Run with a large torrent list (20+ torrents) and confirm the header stays sticky while scrolling

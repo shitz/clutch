@@ -2,11 +2,11 @@
 //!
 //! Displays a sticky column header and a scrollable list of torrent rows, each
 //! showing the torrent name, status, and a progress bar. A toolbar row at the
-//! top holds action buttons (disabled in v0.1).
+//! top holds action buttons (disabled in v0.1) and a Disconnect button.
 //!
 //! # Non-blocking invariant
 //!
-//! All RPC calls are issued via `Command::perform()`. The `update()` method
+//! All RPC calls are issued via `Task::perform()`. The `update()` method
 //! only mutates in-memory state and returns immediately.
 //!
 //! # Polling
@@ -17,7 +17,7 @@
 
 use std::time::Duration;
 
-use iced::widget::{button, column, container, progress_bar, row, scrollable, text};
+use iced::widget::{button, column, container, progress_bar, row, scrollable, text, Space};
 use iced::{Element, Length, Subscription, Task};
 
 use crate::app::Message;
@@ -97,10 +97,13 @@ impl MainScreen {
             button("Pause").style(iced::widget::button::secondary),
             button("Resume").style(iced::widget::button::secondary),
             button("Delete").style(iced::widget::button::secondary),
+            Space::new(),
+            button("Disconnect").on_press(Message::Disconnect),
         ]
         .spacing(8);
 
         // Sticky header — outside the scrollable.
+        // Uses the same FillPortion weights as the data rows so columns align.
         let header = row![
             text("Name").width(Length::FillPortion(COL_NAME)),
             text("Status").width(Length::FillPortion(COL_STATUS)),
@@ -111,12 +114,20 @@ impl MainScreen {
         // Data rows inside the scrollable.
         let rows = self.torrents.iter().map(|t| {
             row![
-                text(&t.name).width(Length::FillPortion(COL_NAME)),
+                // WordOrGlyph breaks long dot-separated filenames at glyph boundary
+                // preventing overflow into adjacent columns.
+                text(&t.name)
+                    .width(Length::FillPortion(COL_NAME))
+                    .wrapping(text::Wrapping::WordOrGlyph),
                 text(status_label(t.status)).width(Length::FillPortion(COL_STATUS)),
+                // .length() sets the main axis (width) of the horizontal bar.
+                // .girth() sets the cross axis (height) explicitly.
                 progress_bar(0.0..=1.0, t.percent_done as f32)
-                    .width(Length::FillPortion(COL_PROGRESS)),
+                    .length(Length::FillPortion(COL_PROGRESS))
+                    .girth(14.0),
             ]
             .padding(4)
+            .align_y(iced::Center)
             .into()
         });
 
@@ -149,14 +160,17 @@ impl MainScreen {
             // 5.6 – Guard: ignore ticks while a request is already in-flight.
             Message::Tick => {
                 if self.is_loading {
+                    tracing::debug!("Tick skipped: RPC call already in-flight");
                     return Task::none();
                 }
+                tracing::debug!("Tick: firing torrent-get");
                 self.is_loading = true;
                 self.fire_torrent_get()
             }
 
             // 5.7 – Replace torrent list and clear the loading flag.
             Message::TorrentsUpdated(Ok(torrents)) => {
+                tracing::info!(count = torrents.len(), "Torrent list refreshed");
                 self.torrents = torrents;
                 self.is_loading = false;
                 self.error = None;
@@ -164,7 +178,7 @@ impl MainScreen {
             }
 
             Message::TorrentsUpdated(Err(err)) => {
-                eprintln!("torrent-get failed: {err}");
+                tracing::error!(error = %err, "torrent-get failed");
                 self.is_loading = false;
                 self.error = Some(err);
                 Task::none()
@@ -172,6 +186,7 @@ impl MainScreen {
 
             // 5.8 – Session rotated: persist new id and retry.
             Message::SessionIdRotated(new_id) => {
+                tracing::debug!(%new_id, "Session ID rotated, retrying torrent-get");
                 self.session_id = new_id;
                 self.fire_torrent_get()
             }

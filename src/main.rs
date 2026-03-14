@@ -3,7 +3,9 @@ mod rpc;
 mod screens;
 
 fn main() -> iced::Result {
-    iced::application("Clutch", app::update, app::view)
+    tracing_subscriber::fmt::init();
+    iced::application(app::AppState::new, app::update, app::view)
+        .title("Clutch")
         .subscription(app::subscription)
-        .run_with(|| (app::AppState::new(), iced::Task::none()))
+        .run()
 }
