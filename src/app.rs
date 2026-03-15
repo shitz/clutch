@@ -72,6 +72,24 @@ pub enum Message {
     /// The `String` is the new session ID. Re-fires the pending `torrent-get`.
     SessionIdRotated(String),
 
+    // -- Main screen action events (v0.2) --
+    /// User clicked a torrent row — toggles selection.
+    TorrentSelected(i64),
+    /// User clicked the Pause toolbar button.
+    PauseClicked,
+    /// User clicked the Resume toolbar button.
+    ResumeClicked,
+    /// User clicked the Delete toolbar button — opens the confirmation row.
+    DeleteClicked,
+    /// User toggled the "Delete local data" checkbox in the confirmation row.
+    DeleteLocalDataToggled(bool),
+    /// User confirmed the delete action.
+    DeleteConfirmed,
+    /// User cancelled the delete action.
+    DeleteCancelled,
+    /// Result of a `torrent-start`, `torrent-stop`, or `torrent-remove` call.
+    ActionCompleted(Result<(), String>),
+
     /// User clicked the Disconnect button on the main screen.
     /// Returns the app to the connection form.
     Disconnect,

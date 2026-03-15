@@ -7,7 +7,7 @@ serves as a remote GUI for a Transmission BitTorrent daemon, communicating exclu
 Transmission JSON-RPC API. It uses the `iced` 0.14 GUI framework and follows the Elm architecture
 (Model / View / Update) using iced's free-function style.
 
-**Current status: v0.1 "Living List" — shipped and working against a real Transmission daemon.**
+**Current status: v0.2 "Torrent Control" — shipped and working against a real Transmission daemon.**
 
 ---
 
@@ -109,6 +109,10 @@ Responsible for:
 - Guarding against concurrent RPC calls with an `is_loading` boolean flag.
 - Handling session-id rotation transparently (409 → `SessionIdRotated` → retry).
 - Providing a toolbar with a **Disconnect** button that routes back to `Screen::Connection`.
+- **Single-torrent selection:** clicking a row highlights it and enables action buttons; clicking again deselects.
+- **Toolbar actions:** Pause (`torrent-stop`), Resume (`torrent-start`), Delete (`torrent-remove`) operate on the selected torrent.
+- **Delete confirmation row:** clicking Delete replaces the toolbar with an inline confirmation row showing the torrent name, a "Delete local data" checkbox, and Confirm/Cancel buttons. The RPC is only issued after confirmation.
+- **Immediate refresh:** after any successful action a `torrent-get` poll fires immediately without waiting for the next 5-second tick.
 
 Layout uses `FillPortion` weights for columns (Name: 5, Status: 2, Progress: 3). Long torrent names
 use `text::Wrapping::WordOrGlyph` to prevent overflow into adjacent columns.
@@ -133,11 +137,14 @@ SessionIdRotated ──▶ retry torrent-get with new session id
 
 All functions are `async` and designed to be called exclusively from `Task::perform()`.
 
-| Function                                         | Description                                                                                          |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| `post_rpc(url, creds, session_id, method, args)` | Single HTTP POST with a 10 s timeout. Returns `Err(SessionRotated)` on 409, `Err(AuthError)` on 401. |
-| `session_get(url, creds, session_id)`            | Connectivity probe. Handles one automatic session rotation. Returns `SessionInfo { session_id }`.    |
-| `torrent_get(url, creds, session_id)`            | Fetches the full torrent list (`id`, `name`, `status`, `percentDone`).                               |
+| Function                                                        | Description                                                                                          |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `post_rpc(url, creds, session_id, method, args)`                | Single HTTP POST with a 10 s timeout. Returns `Err(SessionRotated)` on 409, `Err(AuthError)` on 401. |
+| `session_get(url, creds, session_id)`                           | Connectivity probe. Handles one automatic session rotation. Returns `SessionInfo { session_id }`.    |
+| `torrent_get(url, creds, session_id)`                           | Fetches the full torrent list (`id`, `name`, `status`, `percentDone`).                               |
+| `torrent_start(url, creds, session_id, id)`                     | Resumes the torrent with the given ID (`torrent-start`).                                             |
+| `torrent_stop(url, creds, session_id, id)`                      | Pauses the torrent with the given ID (`torrent-stop`).                                               |
+| `torrent_remove(url, creds, session_id, id, delete_local_data)` | Removes the torrent; when `delete_local_data=true` also deletes downloaded files.                    |
 
 **Session-Id lifecycle:** Transmission uses `X-Transmission-Session-Id` as a lightweight CSRF
 token. On startup (or after rotation) the daemon returns 409 with the new ID in a response header.
@@ -179,10 +186,20 @@ pub enum Message {
     ConnectClicked,
     SessionProbeResult(Result<SessionInfo, String>),
 
-    // Main screen
+    // Main screen — polling
     Tick,
     TorrentsUpdated(Result<Vec<TorrentData>, String>),
     SessionIdRotated(String),
+
+    // Main screen — torrent actions (v0.2)
+    TorrentSelected(i64),
+    PauseClicked,
+    ResumeClicked,
+    DeleteClicked,
+    DeleteLocalDataToggled(bool),
+    DeleteConfirmed,
+    DeleteCancelled,
+    ActionCompleted(Result<(), String>),
 
     // Screen-agnostic
     Disconnect,
@@ -214,13 +231,13 @@ Structured logging via `tracing` 0.1 + `tracing-subscriber` 0.3. Initialised in 
 
 ### 3.11 Test Coverage
 
-14 tests, all passing. Two layers:
+35 tests, all passing. Two layers:
 
 - **Unit tests** (`screens/connection.rs`, `screens/main_screen.rs`): exercise `update()` logic
   entirely in-memory, no async I/O.
 - **Integration tests** (`rpc.rs`): use `wiremock` to stand up a real in-process HTTP server and
   verify the full RPC round-trip including 409 rotation, 401 auth errors, parse errors, and happy
-  paths.
+  paths for `session_get`, `torrent_get`, `torrent_start`, `torrent_stop`, and `torrent_remove`.
 
 ---
 
@@ -228,7 +245,7 @@ Structured logging via `tracing` 0.1 + `tracing-subscriber` 0.3. Initialised in 
 
 Each milestone is a vertical slice: the app remains shippable after every version.
 
-### v0.2 — Torrent Control
+### ~~v0.2 — Torrent Control~~ ✓ Shipped
 
 Wire up the toolbar buttons that are currently rendered but disabled.
 
@@ -236,8 +253,11 @@ Wire up the toolbar buttons that are currently rendered but disabled.
 - `torrent-remove` (with `delete-local-data` flag) mapped to Delete button.
 - Torrent selection: clicking a row highlights it and enables the relevant toolbar buttons.
   Selection state lives in `MainScreen` as `selected_id: Option<i64>`.
+- Delete confirmation row: clicking Delete shows an inline row with a "Delete local data"
+  checkbox and Confirm/Cancel buttons (`confirming_delete: Option<(i64, bool)>`).
 - Optimistic UI: button fires immediately, list refreshes once the action RPC completes.
-- New messages: `PauseClicked`, `ResumeClicked`, `DeleteClicked(bool)`, `ActionCompleted(Result<(), String>)`.
+- New messages: `TorrentSelected(i64)`, `PauseClicked`, `ResumeClicked`, `DeleteClicked`,
+  `DeleteLocalDataToggled(bool)`, `DeleteConfirmed`, `DeleteCancelled`, `ActionCompleted(Result<(), String>)`.
 
 ### v0.3 — Add Torrents
 

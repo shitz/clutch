@@ -289,6 +289,97 @@ pub async fn torrent_get(
     Ok(torrents)
 }
 
+/// Start (resume) a torrent by its Transmission ID.
+///
+/// # Errors
+///
+/// - `RpcError::SessionRotated(new_id)` — caller must handle rotation and retry.
+/// - `RpcError::AuthError` — credentials rejected.
+/// - `RpcError::ConnectionError(_)` — daemon unreachable.
+/// - `RpcError::ParseError(_)` — daemon returned a non-success result string.
+pub async fn torrent_start(
+    url: &str,
+    credentials: &TransmissionCredentials,
+    session_id: &str,
+    id: i64,
+) -> Result<(), RpcError> {
+    tracing::debug!(%url, %session_id, id, "Sending torrent-start");
+    let args = serde_json::json!({ "ids": [id] });
+    let resp = post_rpc(url, credentials, session_id, "torrent-start", Some(args)).await?;
+    if resp.result == "success" {
+        tracing::info!(id, "torrent-start succeeded");
+        Ok(())
+    } else {
+        tracing::error!(id, result = %resp.result, "torrent-start returned non-success");
+        Err(RpcError::ParseError(format!(
+            "torrent-start failed: {}",
+            resp.result
+        )))
+    }
+}
+
+/// Pause (stop) a torrent by its Transmission ID.
+///
+/// # Errors
+///
+/// - `RpcError::SessionRotated(new_id)` — caller must handle rotation and retry.
+/// - `RpcError::AuthError` — credentials rejected.
+/// - `RpcError::ConnectionError(_)` — daemon unreachable.
+/// - `RpcError::ParseError(_)` — daemon returned a non-success result string.
+pub async fn torrent_stop(
+    url: &str,
+    credentials: &TransmissionCredentials,
+    session_id: &str,
+    id: i64,
+) -> Result<(), RpcError> {
+    tracing::debug!(%url, %session_id, id, "Sending torrent-stop");
+    let args = serde_json::json!({ "ids": [id] });
+    let resp = post_rpc(url, credentials, session_id, "torrent-stop", Some(args)).await?;
+    if resp.result == "success" {
+        tracing::info!(id, "torrent-stop succeeded");
+        Ok(())
+    } else {
+        tracing::error!(id, result = %resp.result, "torrent-stop returned non-success");
+        Err(RpcError::ParseError(format!(
+            "torrent-stop failed: {}",
+            resp.result
+        )))
+    }
+}
+
+/// Remove a torrent by its Transmission ID.
+///
+/// When `delete_local_data` is `true` the daemon also removes all downloaded
+/// files from disk. When `false` only the torrent metadata is removed.
+///
+/// # Errors
+///
+/// - `RpcError::SessionRotated(new_id)` — caller must handle rotation and retry.
+/// - `RpcError::AuthError` — credentials rejected.
+/// - `RpcError::ConnectionError(_)` — daemon unreachable.
+/// - `RpcError::ParseError(_)` — daemon returned a non-success result string.
+pub async fn torrent_remove(
+    url: &str,
+    credentials: &TransmissionCredentials,
+    session_id: &str,
+    id: i64,
+    delete_local_data: bool,
+) -> Result<(), RpcError> {
+    tracing::debug!(%url, %session_id, id, delete_local_data, "Sending torrent-remove");
+    let args = serde_json::json!({ "ids": [id], "delete-local-data": delete_local_data });
+    let resp = post_rpc(url, credentials, session_id, "torrent-remove", Some(args)).await?;
+    if resp.result == "success" {
+        tracing::info!(id, delete_local_data, "torrent-remove succeeded");
+        Ok(())
+    } else {
+        tracing::error!(id, result = %resp.result, "torrent-remove returned non-success");
+        Err(RpcError::ParseError(format!(
+            "torrent-remove failed: {}",
+            resp.result
+        )))
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -462,5 +553,185 @@ mod tests {
         let result = torrent_get(&url, &creds, "sid").await;
 
         assert!(matches!(result, Err(RpcError::ParseError(_))));
+    }
+
+    // ── torrent_start tests ───────────────────────────────────────────────────
+
+    /// torrent_start success — 200 with result "success" returns Ok(()).
+    #[tokio::test]
+    async fn torrent_start_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "result": "success", "arguments": {} })),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_start(&url, &creds, "sid", 42).await;
+        assert!(result.is_ok());
+    }
+
+    /// torrent_start — 409 yields SessionRotated.
+    #[tokio::test]
+    async fn torrent_start_session_rotation() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(ResponseTemplate::new(409).insert_header(SESSION_ID_HEADER, "new-sid"))
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_start(&url, &creds, "old-sid", 1).await;
+        assert!(matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "new-sid"));
+    }
+
+    /// torrent_start — 401 yields AuthError.
+    #[tokio::test]
+    async fn torrent_start_auth_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_start(&url, &creds, "sid", 1).await;
+        assert!(matches!(result, Err(RpcError::AuthError)));
+    }
+
+    // ── torrent_stop tests ────────────────────────────────────────────────────
+
+    /// torrent_stop success — 200 with result "success" returns Ok(()).
+    #[tokio::test]
+    async fn torrent_stop_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "result": "success", "arguments": {} })),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_stop(&url, &creds, "sid", 7).await;
+        assert!(result.is_ok());
+    }
+
+    /// torrent_stop — 409 yields SessionRotated.
+    #[tokio::test]
+    async fn torrent_stop_session_rotation() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(409).insert_header(SESSION_ID_HEADER, "rotated-sid"),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_stop(&url, &creds, "old-sid", 7).await;
+        assert!(matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "rotated-sid"));
+    }
+
+    /// torrent_stop — 401 yields AuthError.
+    #[tokio::test]
+    async fn torrent_stop_auth_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_stop(&url, &creds, "sid", 7).await;
+        assert!(matches!(result, Err(RpcError::AuthError)));
+    }
+
+    // ── torrent_remove tests ──────────────────────────────────────────────────
+
+    /// torrent_remove success without deleting local data.
+    #[tokio::test]
+    async fn torrent_remove_success_keep_data() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "result": "success", "arguments": {} })),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_remove(&url, &creds, "sid", 3, false).await;
+        assert!(result.is_ok());
+    }
+
+    /// torrent_remove success with delete_local_data = true.
+    #[tokio::test]
+    async fn torrent_remove_success_delete_data() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "result": "success", "arguments": {} })),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_remove(&url, &creds, "sid", 3, true).await;
+        assert!(result.is_ok());
+    }
+
+    /// torrent_remove — 409 yields SessionRotated.
+    #[tokio::test]
+    async fn torrent_remove_session_rotation() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(ResponseTemplate::new(409).insert_header(SESSION_ID_HEADER, "new-id"))
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_remove(&url, &creds, "old-id", 3, false).await;
+        assert!(matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "new-id"));
+    }
+
+    /// torrent_remove — 401 yields AuthError.
+    #[tokio::test]
+    async fn torrent_remove_auth_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_remove(&url, &creds, "sid", 3, false).await;
+        assert!(matches!(result, Err(RpcError::AuthError)));
     }
 }
