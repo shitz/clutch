@@ -22,8 +22,7 @@
 use iced::{Element, Subscription, Task};
 
 use crate::screens::connection::ConnectionScreen;
-#[allow(unused_imports)]
-use crate::screens::main_screen::MainScreen;
+use crate::screens::main_screen::{self, MainScreen};
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
@@ -62,59 +61,9 @@ pub enum Message {
     /// Result of the `session-get` connectivity probe initiated by `ConnectClicked`.
     SessionProbeResult(Result<crate::rpc::SessionInfo, String>),
 
-    // -- Main screen events --
-    /// Fired by the polling subscription every 5 seconds.
-    Tick,
-    /// Result of a `torrent-get` RPC call. `Ok` carries the fresh torrent list;
-    /// `Err` carries a human-readable error string.
-    TorrentsUpdated(Result<Vec<crate::rpc::TorrentData>, String>),
-    /// The daemon returned 409, meaning the session ID has rotated.
-    /// The `String` is the new session ID. Re-fires the pending `torrent-get`.
-    SessionIdRotated(String),
-
-    // -- Main screen action events (v0.2) --
-    /// User clicked a torrent row — toggles selection.
-    TorrentSelected(i64),
-    /// User clicked the Pause toolbar button.
-    PauseClicked,
-    /// User clicked the Resume toolbar button.
-    ResumeClicked,
-    /// User clicked the Delete toolbar button — opens the confirmation row.
-    DeleteClicked,
-    /// User toggled the "Delete local data" checkbox in the confirmation row.
-    DeleteLocalDataToggled(bool),
-    /// User confirmed the delete action.
-    DeleteConfirmed,
-    /// User cancelled the delete action.
-    DeleteCancelled,
-    /// Result of a `torrent-start`, `torrent-stop`, or `torrent-remove` call.
-    ActionCompleted(Result<(), String>),
-
-    // -- Main screen add-torrent events (v0.3) --
-    /// User clicked the "Add Torrent" button — opens the native file picker.
-    AddTorrentClicked,
-    /// Result of opening + reading + parsing a `.torrent` file inside `Task::perform`.
-    TorrentFileRead(Result<crate::screens::main_screen::FileReadResult, String>),
-    /// User clicked the "Add Link" button — opens the magnet-link dialog.
-    AddLinkClicked,
-    /// User typed in the magnet URI field of the add dialog.
-    AddDialogMagnetChanged(String),
-    /// User edited the destination folder field of the add dialog.
-    AddDialogDestinationChanged(String),
-    /// User confirmed the add-torrent dialog.
-    AddConfirmed,
-    /// User cancelled the add-torrent dialog.
-    AddCancelled,
-    /// Result of a `torrent-add` RPC call.
-    AddCompleted(Result<(), String>),
-
-    /// The serialized RPC worker subscription has started and is ready.
-    /// Store the sender and use it for all subsequent RPC calls.
-    RpcWorkerReady(tokio::sync::mpsc::Sender<crate::rpc::RpcWork>),
-
-    /// User clicked the Disconnect button on the main screen.
-    /// Returns the app to the connection form.
-    Disconnect,
+    // -- Main screen events (delegated) --
+    /// Wraps all events originating from the main screen (list, inspector, disconnect).
+    Main(main_screen::Message),
 }
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -147,8 +96,8 @@ impl AppState {
 /// mutates in-memory state or delegates to a [`Screen`] method that itself
 /// returns immediately. All async work is encapsulated in the returned `Task`.
 pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
-    // Disconnect is screen-agnostic; handle it before dispatching.
-    if let Message::Disconnect = &message {
+    // Intercept disconnect before taking a mutable borrow on state.screen.
+    if let Message::Main(main_screen::Message::Disconnect) = &message {
         tracing::info!("Disconnecting from daemon, returning to connection screen");
         state.screen = Screen::Connection(ConnectionScreen::new());
         return Task::none();
@@ -162,7 +111,10 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
             }
             task
         }
-        Screen::Main(main) => main.update(message),
+        Screen::Main(main) => match message {
+            Message::Main(msg) => main.update(msg).map(Message::Main),
+            _ => Task::none(),
+        },
     }
 }
 
@@ -170,7 +122,7 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
 pub fn view(state: &AppState) -> Element<'_, Message> {
     match &state.screen {
         Screen::Connection(conn) => conn.view(),
-        Screen::Main(main) => main.view(),
+        Screen::Main(main) => main.view().map(Message::Main),
     }
 }
 
@@ -181,6 +133,6 @@ pub fn view(state: &AppState) -> Element<'_, Message> {
 pub fn subscription(state: &AppState) -> Subscription<Message> {
     match &state.screen {
         Screen::Connection(_) => Subscription::none(),
-        Screen::Main(main) => main.subscription(),
+        Screen::Main(main) => main.subscription().map(Message::Main),
     }
 }

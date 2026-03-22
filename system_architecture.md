@@ -7,7 +7,7 @@ serves as a remote GUI for a Transmission BitTorrent daemon, communicating exclu
 Transmission JSON-RPC API. It uses the `iced` 0.14 GUI framework and follows the Elm architecture
 (Model / View / Update) using iced's free-function style.
 
-**Current status: v0.3 "Add Torrents" — shipped and working against a real Transmission daemon.**
+**Current status: v0.4 "Detail Inspector" — shipped and working against a real Transmission daemon.**
 
 ---
 
@@ -37,7 +37,9 @@ src/
 └── screens/
     ├── mod.rs
     ├── connection.rs     Connection form screen.
-    └── main_screen.rs    Torrent list screen.
+    ├── main_screen.rs    Parent delegating screen: composes list + inspector.
+    ├── torrent_list.rs   Torrent list sub-component (toolbar, rows, add dialog, RPC worker).
+    └── inspector.rs      Detail inspector sub-component (tabbed panel).
 ```
 
 ### 3.2 Elm Loop (iced 0.14 free-function style)
@@ -101,45 +103,64 @@ Idle ──[ConnectClicked]──▶ Connecting
     → Screen::Main                       Idle (inline error)
 ```
 
-### 3.5 Main Screen (`screens/main_screen.rs`)
+### 3.5 Main Screen (`screens/main_screen.rs`, `screens/torrent_list.rs`, `screens/inspector.rs`)
 
-Responsible for:
+`MainScreen` is a **parent Elm component** that owns two child components and delegates to them:
 
-- Displaying a sticky column header + scrollable torrent rows (Name / Status / Progress).
-- Polling the daemon every 5 seconds via an `iced::time::every` subscription.
-- Serializing all RPC calls through a single MPSC worker subscription (see §3.6 RPC Worker).
-- Using an `is_loading` boolean as an **efficiency guard** to skip redundant tick enqueues (not for correctness — the worker provides the serialization guarantee).
-- Handling session-id rotation transparently (409 → `SessionIdRotated` → persists new ID; the retry happens inside the worker).
-- Providing a toolbar with a **Disconnect** button that routes back to `Screen::Connection`.
-- **Single-torrent selection:** clicking a row highlights it and enables action buttons; clicking again deselects.
-- **Toolbar actions:** Pause (`torrent-stop`), Resume (`torrent-start`), Delete (`torrent-remove`) operate on the selected torrent.
-- **Delete confirmation row:** clicking Delete replaces the toolbar with an inline confirmation row showing the torrent name, a "Delete local data" checkbox, and Confirm/Cancel buttons. The RPC is only issued after confirmation.
-- **Immediate refresh:** after any successful action a `torrent-get` poll fires immediately without waiting for the next 5-second tick.
-- **Add Torrent button:** opens a native file picker (via `rfd`); the selected `.torrent` file is read, Base64-encoded, and parsed locally with `lava_torrent` to extract the file list — all in a single `Task::perform`. On success, the add-torrent dialog opens.
-- **Add Link button:** opens the add-torrent dialog in magnet-link mode.
-- **Add-torrent dialog:** a modal overlay rendered via `iced::widget::stack`. Contains a destination folder text input, a scrollable file list preview (name + size per file), and Add/Cancel buttons. Both flows (file and magnet) share this dialog. After the user confirms, `torrent-add` is called and the list is refreshed immediately on success.
+- **`TorrentListScreen`** (`torrent_list.rs`) — toolbar, sticky header, scrollable torrent rows,
+  add-torrent modal, and the serialized RPC worker. All state and messaging previously on the
+  monolithic main screen now lives here.
+- **`InspectorScreen`** (`inspector.rs`) — tabbed detail panel shown below the list
+  when a torrent is selected.
 
-Layout uses `FillPortion` weights for columns (Name: 5, Status: 2, Progress: 3). Long torrent names
-use `text::Wrapping::WordOrGlyph` to prevent overflow into adjacent columns.
+#### Layout
 
-Polling state machine:
+When no torrent is selected the list fills the full height. When a torrent is selected the content
+area splits vertically using `Length::FillPortion`:
 
 ```
-Idle ──[Tick]──▶ is_loading=true, enqueues TorrentGet to worker
-                     │
-              worker processes it
-                     │
-     ┌───────────────┴──────────────────────────┐
-     ▼                                           ▼
-TorrentsUpdated(Ok)                    TorrentsUpdated(Err)
-     │                                           │
-     ▼                                           ▼
-Idle, list replaced                   Idle, error shown
-
-(409 inside worker)
-execute_work retries once with new session id, then emits SessionIdRotated
-to persist the new id in MainScreen.session_id
+┌──────────────────────────────────────────────────────┐
+│   TorrentListScreen            (top 3/4)             │
+├──────────────────────────────────────────────────────┤
+│   InspectorScreen              (bottom 1/4)          │
+└──────────────────────────────────────────────────────┘
 ```
+
+`main_screen::view()` checks `list.selected_torrent()` — if `None`, returns only the list element;
+if `Some`, wraps both in a `column!` with `FillPortion(3)` / `FillPortion(1)` containers, each
+`width(Length::Fill)`.
+
+#### Message Routing
+
+`MainScreen` wraps child messages and intercepts two cross-cutting concerns before delegating:
+
+1. `List(TorrentListMessage::Disconnect)` → intercepted, escalated via
+   `Task::done(Message::Disconnect)` to `app::update`.
+2. `List(TorrentListMessage::TorrentSelected(id))` → delegate to `torrent_list::update` first,
+   then reset `inspector.active_tab` to `General` if a _new_ torrent was selected.
+
+All other `List(_)` messages are delegated to `torrent_list::update`; all `Inspector(_)` messages
+are delegated to `inspector::update`.
+
+#### TorrentListScreen responsibilities
+
+- Sticky column header + scrollable torrent rows (Name / Status / Progress).
+- Polling the daemon every **1 second** via an `iced::time::every` subscription.
+- Serializing all RPC calls through the MPSC worker subscription (see §3.6a).
+- `is_loading` efficiency guard, session-id rotation, toolbar actions, delete confirmation row,
+  add-torrent and add-link flows — all unchanged.
+- `selected_torrent() -> Option<&TorrentData>` — exposes the currently selected torrent to parent.
+- `Message::Disconnect` variant (never processed by `update`; intercepted by parent).
+
+#### InspectorScreen responsibilities (new in v0.4)
+
+- Renders the detail panel for the torrent passed in from the parent via `inspector::view(state, torrent)`.
+- Maintains `active_tab: ActiveTab` (default `General`).
+- `update()` handles `Message::TabSelected(tab)` only.
+- Four tabs — **General**, **Files**, **Trackers**, **Peers** — each rendered by a dedicated
+  private function.
+- Formatting helpers: `format_size(i64)`, `format_speed(i64)`, `format_eta(i64)`, `format_ago(i64)`.
+  All return `"—"` for sentinel values (`-1` / `0` where semantically absent).
 
 ### 3.6 RPC Client (`rpc.rs`)
 
@@ -150,7 +171,7 @@ inside the serialized worker (all main-screen calls).
 | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `post_rpc(url, creds, session_id, method, args, timeout)`       | Single HTTP POST. Returns `Err(SessionRotated)` on 409, `Err(AuthError)` on 401. Timeout is caller-supplied (10 s standard, 60 s for `torrent-add`).                                                                                                                                                                                                              |
 | `session_get(url, creds, session_id)`                           | Connectivity probe. Handles one automatic session rotation. Returns `SessionInfo { session_id }`. Called directly from `Task::perform()` on the connection screen.                                                                                                                                                                                                |
-| `torrent_get(url, creds, session_id)`                           | Fetches the full torrent list (`id`, `name`, `status`, `percentDone`).                                                                                                                                                                                                                                                                                            |
+| `torrent_get(url, creds, session_id)`                           | Fetches the full torrent list (`id`, `name`, `status`, `percentDone`, `totalSize`, `downloadedEver`, `uploadedEver`, `uploadRatio`, `eta`, `rateDownload`, `rateUpload`, `files`, `fileStats`, `trackerStats`, `peers`).                                                                                                                                          |
 | `torrent_start(url, creds, session_id, id)`                     | Resumes the torrent with the given ID (`torrent-start`).                                                                                                                                                                                                                                                                                                          |
 | `torrent_stop(url, creds, session_id, id)`                      | Pauses the torrent with the given ID (`torrent-stop`).                                                                                                                                                                                                                                                                                                            |
 | `torrent_remove(url, creds, session_id, id, delete_local_data)` | Removes the torrent; when `delete_local_data=true` also deletes downloaded files.                                                                                                                                                                                                                                                                                 |
@@ -217,11 +238,11 @@ pub enum RpcResult {
 }
 ```
 
-**`MainScreen` integration:**
+**`TorrentListScreen` integration:**
 
-- `MainScreen.sender: Option<tokio::sync::mpsc::Sender<RpcWork>>` — populated when `Message::RpcWorkerReady` arrives from the subscription.
-- `MainScreen::enqueue(work)` — calls `tx.try_send(work)`; logs an error if the 32-item buffer is full (unreachable under normal usage).
-- `MainScreen::enqueue_torrent_get()` — convenience wrapper used by `Tick` and post-action refresh.
+- `TorrentListScreen.sender: Option<tokio::sync::mpsc::Sender<RpcWork>>` — populated when `Message::RpcWorkerReady` arrives from the subscription.
+- `TorrentListScreen::enqueue(work)` — calls `tx.try_send(work)`; logs an error if the 32-item buffer is full (unreachable under normal usage).
+- `TorrentListScreen::enqueue_torrent_get()` — convenience wrapper used by `Tick` and post-action refresh.
 - `is_loading` remains as an **efficiency guard only**: when `true`, incoming `Tick` messages are dropped so the queue doesn't accumulate redundant poll requests. It no longer provides the serialization invariant.
 
 ### 3.7 Data Models
@@ -271,6 +292,8 @@ pub enum AddDialogState {
 
 ### 3.8 Message Enum (implemented)
 
+`app::Message` is now minimal — all main-screen events are nested under `Main`:
+
 ```rust
 pub enum Message {
     // Connection screen
@@ -281,38 +304,39 @@ pub enum Message {
     ConnectClicked,
     SessionProbeResult(Result<SessionInfo, String>),
 
-    // Main screen — polling
+    // Main screen (all events delegated through MainScreen)
+    Main(main_screen::Message),
+}
+
+// main_screen::Message wraps the two child components
+pub enum main_screen::Message {
+    List(torrent_list::Message),
+    Inspector(inspector::Message),
+    Disconnect, // escalated from List(TorrentListMessage::Disconnect)
+}
+
+// torrent_list::Message — polling, actions, add-torrent dialog
+pub enum torrent_list::Message {
     Tick,
     TorrentsUpdated(Result<Vec<TorrentData>, String>),
     SessionIdRotated(String),
-
-    // Main screen — torrent actions (v0.2)
+    RpcWorkerReady(mpsc::Sender<RpcWork>),
     TorrentSelected(i64),
-    PauseClicked,
-    ResumeClicked,
-    DeleteClicked,
-    DeleteLocalDataToggled(bool),
-    DeleteConfirmed,
-    DeleteCancelled,
+    PauseClicked, ResumeClicked, DeleteClicked,
+    DeleteLocalDataToggled(bool), DeleteConfirmed, DeleteCancelled,
     ActionCompleted(Result<(), String>),
-
-    // Main screen — add torrent (v0.3)
     AddTorrentClicked,
     TorrentFileRead(Result<FileReadResult, String>),
     AddLinkClicked,
-    AddDialogMagnetChanged(String),
-    AddDialogDestinationChanged(String),
-    AddConfirmed,
-    AddCancelled,
+    AddDialogMagnetChanged(String), AddDialogDestinationChanged(String),
+    AddConfirmed, AddCancelled,
     AddCompleted(Result<(), String>),
+    Disconnect, // intercepted by parent, never processed by update()
+}
 
-    // RPC worker subscription (v0.3 hardening)
-    /// Emitted once by the worker subscription on startup.
-    /// The sender is stored in MainScreen and used for all subsequent RPC calls.
-    RpcWorkerReady(tokio::sync::mpsc::Sender<rpc::RpcWork>),
-
-    // Screen-agnostic
-    Disconnect,
+// inspector::Message
+pub enum inspector::Message {
+    TabSelected(ActiveTab),
 }
 ```
 
@@ -344,14 +368,17 @@ Structured logging via `tracing` 0.1 + `tracing-subscriber` 0.3. Initialised in 
 
 ### 3.11 Test Coverage
 
-48 tests, all passing. Two layers:
+69 tests, all passing. Three layers:
 
-- **Unit tests** (`screens/connection.rs`, `screens/main_screen.rs`): exercise `update()` logic
-  entirely in-memory, no async I/O.
+- **Unit tests** (`screens/connection.rs`, `screens/torrent_list.rs`, `screens/main_screen.rs`,
+  `screens/inspector.rs`): exercise `update()` logic entirely in-memory, no async I/O.
+  The inspector module includes 15 unit tests covering all formatting helpers and tab switching.
+  The main screen tests verify tab-reset behaviour and the inspector visibility invariant.
 - **Integration tests** (`rpc.rs`): use `wiremock` to stand up a real in-process HTTP server and
   verify the full RPC round-trip including 409 rotation, 401 auth errors, parse errors, and happy
   paths for `session_get`, `torrent_get`, `torrent_start`, `torrent_stop`, `torrent_remove`, and
   `torrent_add` (magnet, metainfo, duplicate, empty `download_dir`, rotation, auth error).
+  A dedicated integration test verifies all extended `torrent_get` fields added in v0.4.
 
 ---
 
@@ -393,19 +420,23 @@ Allow users to add new torrents to the daemon.
   `AddLinkClicked`, `AddDialogMagnetChanged(String)`, `AddDialogDestinationChanged(String)`,
   `AddConfirmed`, `AddCancelled`, `AddCompleted(Result<(), String>)`.
 
-### v0.4 — Detail Inspector
+### ~~v0.4 — Detail Inspector~~ ✓ Shipped
 
-A detail panel that slides in below the list when a torrent is selected.
-
-- Split the main area: list occupies ~60%, inspector ~40% (proportions configurable later).
-- Inspector tabs (row of toggle buttons): **General**, **Files**, **Trackers**, **Peers**.
-- **General:** name, total size, downloaded, uploaded, ratio, ETA, download/upload speeds.
-- **Files:** a scrollable list of files with per-file progress bars.
-- **Trackers:** URL, seeder count, leecher count, last announce time.
-- **Peers:** IP, client string, upload/download rate contribution.
-- New RPC field requests: `totalSize`, `downloadedEver`, `uploadedEver`, `uploadRatio`, `eta`,
+- **Separate Elm sub-components:** `TorrentListScreen` (`torrent_list.rs`) and `InspectorScreen`
+  (`inspector.rs`) are self-contained components. `MainScreen` (`main_screen.rs`) composes them
+  and delegates messages.
+- **Horizontal split:** when a torrent is selected the content area splits — list takes
+  `FillPortion(3)` (top 3/4), inspector takes `FillPortion(1)` (bottom 1/4). No inspector
+  rendered when nothing is selected.
+- **Inspector tabs:** General, Files, Trackers, Peers. The active tab resets to General whenever
+  a different torrent is selected.
+- **General tab:** name, total size, downloaded, uploaded, ratio, ETA, download/upload speeds.
+- **Files tab:** scrollable file list with per-file progress bars.
+- **Trackers tab:** host, seeder count, leecher count, last announce time.
+- **Peers tab:** IP, client string, upload/download rate.
+- **New RPC fields:** `totalSize`, `downloadedEver`, `uploadedEver`, `uploadRatio`, `eta`,
   `rateDownload`, `rateUpload`, `files`, `fileStats`, `trackerStats`, `peers`.
-- Polling interval drops to **2 s** now that the panel shows live transfer speeds.
+- **Polling interval:** reduced to **1 s** (from 5 s) to show live transfer speeds.
 
 ### v0.5 — Extended Torrent List Columns
 
@@ -420,7 +451,7 @@ Expand the list view with additional columns visible in v0.4's data.
 - **Settings persistence:** Save connection profiles and UI preferences to a config file (via
   `directories` + `toml` or `serde_json`).
 - **Multiple connection profiles:** A dropdown on the connection screen to select saved daemons.
-- **Polling interval:** Configurable (1–30 s) with a sensible default of 2 s.
+- **Polling interval:** Configurable (1–30 s) with a sensible default of 1 s.
 - **Theme:** Light / dark mode toggle via iced's built-in theme system.
 - **Error recovery:** Automatic reconnect with exponential back-off when the daemon becomes
   unreachable while the main screen is active.

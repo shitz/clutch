@@ -73,11 +73,56 @@ impl std::fmt::Display for RpcError {
 
 // ── Data models ───────────────────────────────────────────────────────────────
 
+/// A single file within a torrent, as returned by `torrent-get`.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TorrentFile {
+    pub name: String,
+    pub length: i64,
+}
+
+/// Per-file download progress, parallel to the `files` array.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TorrentFileStats {
+    #[serde(rename = "bytesCompleted")]
+    pub bytes_completed: i64,
+}
+
+/// Tracker statistics for a single tracker announce URL.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TrackerStat {
+    pub host: String,
+    /// Number of seeders; `-1` when unknown.
+    #[serde(rename = "seederCount")]
+    pub seeder_count: i32,
+    /// Number of leechers; `-1` when unknown.
+    #[serde(rename = "leecherCount")]
+    pub leecher_count: i32,
+    /// Unix timestamp of last successful announce; `0` when never announced.
+    #[serde(rename = "lastAnnounceTime")]
+    pub last_announce_time: i64,
+}
+
+/// A single connected peer.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct PeerInfo {
+    pub address: String,
+    #[serde(rename = "clientName")]
+    #[allow(dead_code)] // deserialized but display-hidden pending column settings
+    pub client_name: String,
+    /// Bytes per second the peer is sending to us.
+    #[serde(rename = "rateToClient")]
+    pub rate_to_client: i64,
+    /// Bytes per second we are sending to the peer.
+    #[serde(rename = "rateToPeer")]
+    pub rate_to_peer: i64,
+}
+
 /// A single torrent as returned by the `torrent-get` RPC method.
 ///
 /// Field names use `serde` rename attributes to match Transmission's camelCase
-/// JSON keys.
-#[derive(Debug, Clone, Deserialize)]
+/// JSON keys. All v0.4 extended fields use `#[serde(default)]` so responses
+/// from older Transmission versions or partial field sets still parse cleanly.
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct TorrentData {
     /// Transmission's unique numeric torrent identifier.
     pub id: i64,
@@ -95,6 +140,41 @@ pub struct TorrentData {
     /// Download completion as a fraction in `[0.0, 1.0]`.
     #[serde(rename = "percentDone")]
     pub percent_done: f64,
+
+    // ── v0.4 extended fields ──────────────────────────────────────────────
+    /// Total size of all wanted files in bytes.
+    #[serde(rename = "totalSize", default)]
+    pub total_size: i64,
+    /// Total bytes downloaded (including wasted).
+    #[serde(rename = "downloadedEver", default)]
+    pub downloaded_ever: i64,
+    /// Total bytes uploaded.
+    #[serde(rename = "uploadedEver", default)]
+    pub uploaded_ever: i64,
+    /// Upload-to-download ratio; `-1.0` when ratio is unavailable.
+    #[serde(rename = "uploadRatio", default)]
+    pub upload_ratio: f64,
+    /// Estimated seconds until download completes; `-1` when unavailable.
+    #[serde(default)]
+    pub eta: i64,
+    /// Current download rate in bytes/s.
+    #[serde(rename = "rateDownload", default)]
+    pub rate_download: i64,
+    /// Current upload rate in bytes/s.
+    #[serde(rename = "rateUpload", default)]
+    pub rate_upload: i64,
+    /// Per-file list; empty when not requested or not applicable.
+    #[serde(default)]
+    pub files: Vec<TorrentFile>,
+    /// Per-file download statistics; parallel to `files`.
+    #[serde(rename = "fileStats", default)]
+    pub file_stats: Vec<TorrentFileStats>,
+    /// Per-tracker announce statistics.
+    #[serde(rename = "trackerStats", default)]
+    pub tracker_stats: Vec<TrackerStat>,
+    /// Currently connected peers.
+    #[serde(default)]
+    pub peers: Vec<PeerInfo>,
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -294,7 +374,12 @@ pub async fn torrent_get(
 ) -> Result<Vec<TorrentData>, RpcError> {
     tracing::debug!(%url, %session_id, "Fetching torrent list");
     let args = serde_json::json!({
-        "fields": ["id", "name", "status", "percentDone"]
+        "fields": [
+            "id", "name", "status", "percentDone",
+            "totalSize", "downloadedEver", "uploadedEver", "uploadRatio",
+            "eta", "rateDownload", "rateUpload",
+            "files", "fileStats", "trackerStats", "peers"
+        ]
     });
 
     let resp = post_rpc(
@@ -510,6 +595,7 @@ pub async fn torrent_add(
 /// sequentially by the background subscription, ensuring at most one HTTP
 /// connection to the daemon is in-flight at any time.
 #[derive(Debug, Clone)]
+#[allow(clippy::enum_variant_names)]
 pub enum RpcWork {
     TorrentGet {
         url: String,
@@ -795,6 +881,68 @@ mod tests {
         assert_eq!(torrents[0].name, "Ubuntu ISO");
         assert_eq!(torrents[0].status, 6);
         assert!((torrents[1].percent_done - 0.43).abs() < f64::EPSILON);
+    }
+
+    /// 2.2 – torrent_get deserializes v0.4 extended fields correctly.
+    #[tokio::test]
+    async fn torrent_get_extended_fields() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": "success",
+                "arguments": {
+                    "torrents": [{
+                        "id": 1, "name": "Test", "status": 4, "percentDone": 0.5,
+                        "totalSize": 1073741824,
+                        "downloadedEver": 536870912,
+                        "uploadedEver": 104857600,
+                        "uploadRatio": 0.19,
+                        "eta": 300,
+                        "rateDownload": 1048576,
+                        "rateUpload": 204800,
+                        "files": [{ "name": "movie.mkv", "length": 1073741824 }],
+                        "fileStats": [{ "bytesCompleted": 536870912 }],
+                        "trackerStats": [{
+                            "host": "tracker.example.com",
+                            "seederCount": 10,
+                            "leecherCount": 3,
+                            "lastAnnounceTime": 1700000000
+                        }],
+                        "peers": [{
+                            "address": "1.2.3.4",
+                            "clientName": "qBittorrent",
+                            "rateToClient": 512000,
+                            "rateToPeer": 0
+                        }]
+                    }]
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_get(&url, &creds, "sid").await;
+
+        assert!(result.is_ok());
+        let torrents = result.unwrap();
+        let t = &torrents[0];
+        assert_eq!(t.total_size, 1073741824);
+        assert_eq!(t.downloaded_ever, 536870912);
+        assert_eq!(t.uploaded_ever, 104857600);
+        assert!((t.upload_ratio - 0.19).abs() < 1e-6);
+        assert_eq!(t.eta, 300);
+        assert_eq!(t.rate_download, 1048576);
+        assert_eq!(t.rate_upload, 204800);
+        assert_eq!(t.files.len(), 1);
+        assert_eq!(t.files[0].name, "movie.mkv");
+        assert_eq!(t.file_stats[0].bytes_completed, 536870912);
+        assert_eq!(t.tracker_stats[0].host, "tracker.example.com");
+        assert_eq!(t.tracker_stats[0].seeder_count, 10);
+        assert_eq!(t.peers[0].address, "1.2.3.4");
+        assert_eq!(t.peers[0].client_name, "qBittorrent");
+        assert_eq!(t.peers[0].rate_to_client, 512000);
     }
 
     /// 7.6 – A malformed response body must yield ParseError.
