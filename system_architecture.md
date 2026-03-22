@@ -7,7 +7,7 @@ serves as a remote GUI for a Transmission BitTorrent daemon, communicating exclu
 Transmission JSON-RPC API. It uses the `iced` 0.14 GUI framework and follows the Elm architecture
 (Model / View / Update) using iced's free-function style.
 
-**Current status: v0.2 "Torrent Control" — shipped and working against a real Transmission daemon.**
+**Current status: v0.3 "Add Torrents" — shipped and working against a real Transmission daemon.**
 
 ---
 
@@ -15,12 +15,13 @@ Transmission JSON-RPC API. It uses the `iced` 0.14 GUI framework and follows the
 
 These constraints are fixed across all versions and must never be violated:
 
-| Constraint               | Rule                                                                                                |
-| ------------------------ | --------------------------------------------------------------------------------------------------- |
-| **Non-blocking UI**      | `update()` must return in microseconds. All I/O lives inside `Task::perform()`.                     |
-| **Single RPC in-flight** | A new poll is not started until the previous one resolves (`is_loading` guard).                     |
-| **Screen-safe state**    | Torrent data is only accessible when `Screen::Main` is active — illegal states are unrepresentable. |
-| **Cross-platform**       | No GTK, no web views. Pure Rust dependencies only.                                                  |
+| Constraint             | Rule                                                                                                                                              |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Non-blocking UI**    | `update()` must return in microseconds. All I/O lives in the RPC worker subscription or `Task::perform()`.                                        |
+| **Serialized RPC**     | All RPC calls flow through a single `tokio::sync::mpsc` channel processed one at a time — at most one HTTP connection to the daemon is in-flight. |
+| **Ordered submission** | Work items are enqueued from `update()` (synchronous), so submission order is deterministic regardless of the tokio scheduler.                    |
+| **Screen-safe state**  | Torrent data is only accessible when `Screen::Main` is active — illegal states are unrepresentable.                                               |
+| **Cross-platform**     | No GTK, no web views. Pure Rust dependencies only.                                                                                                |
 
 ---
 
@@ -106,13 +107,17 @@ Responsible for:
 
 - Displaying a sticky column header + scrollable torrent rows (Name / Status / Progress).
 - Polling the daemon every 5 seconds via an `iced::time::every` subscription.
-- Guarding against concurrent RPC calls with an `is_loading` boolean flag.
-- Handling session-id rotation transparently (409 → `SessionIdRotated` → retry).
+- Serializing all RPC calls through a single MPSC worker subscription (see §3.6 RPC Worker).
+- Using an `is_loading` boolean as an **efficiency guard** to skip redundant tick enqueues (not for correctness — the worker provides the serialization guarantee).
+- Handling session-id rotation transparently (409 → `SessionIdRotated` → persists new ID; the retry happens inside the worker).
 - Providing a toolbar with a **Disconnect** button that routes back to `Screen::Connection`.
 - **Single-torrent selection:** clicking a row highlights it and enables action buttons; clicking again deselects.
 - **Toolbar actions:** Pause (`torrent-stop`), Resume (`torrent-start`), Delete (`torrent-remove`) operate on the selected torrent.
 - **Delete confirmation row:** clicking Delete replaces the toolbar with an inline confirmation row showing the torrent name, a "Delete local data" checkbox, and Confirm/Cancel buttons. The RPC is only issued after confirmation.
 - **Immediate refresh:** after any successful action a `torrent-get` poll fires immediately without waiting for the next 5-second tick.
+- **Add Torrent button:** opens a native file picker (via `rfd`); the selected `.torrent` file is read, Base64-encoded, and parsed locally with `lava_torrent` to extract the file list — all in a single `Task::perform`. On success, the add-torrent dialog opens.
+- **Add Link button:** opens the add-torrent dialog in magnet-link mode.
+- **Add-torrent dialog:** a modal overlay rendered via `iced::widget::stack`. Contains a destination folder text input, a scrollable file list preview (name + size per file), and Add/Cancel buttons. Both flows (file and magnet) share this dialog. After the user confirms, `torrent-add` is called and the list is refreshed immediately on success.
 
 Layout uses `FillPortion` weights for columns (Name: 5, Status: 2, Progress: 3). Long torrent names
 use `text::Wrapping::WordOrGlyph` to prevent overflow into adjacent columns.
@@ -120,7 +125,9 @@ use `text::Wrapping::WordOrGlyph` to prevent overflow into adjacent columns.
 Polling state machine:
 
 ```
-Idle ──[Tick]──▶ Loading (is_loading = true)
+Idle ──[Tick]──▶ is_loading=true, enqueues TorrentGet to worker
+                     │
+              worker processes it
                      │
      ┌───────────────┴──────────────────────────┐
      ▼                                           ▼
@@ -128,31 +135,94 @@ TorrentsUpdated(Ok)                    TorrentsUpdated(Err)
      │                                           │
      ▼                                           ▼
 Idle, list replaced                   Idle, error shown
-     ▲
-     │ (409 mid-flight)
-SessionIdRotated ──▶ retry torrent-get with new session id
+
+(409 inside worker)
+execute_work retries once with new session id, then emits SessionIdRotated
+to persist the new id in MainScreen.session_id
 ```
 
 ### 3.6 RPC Client (`rpc.rs`)
 
-All functions are `async` and designed to be called exclusively from `Task::perform()`.
+All public functions are `async` and invoked either from `Task::perform()` (connection probe) or
+inside the serialized worker (all main-screen calls).
 
-| Function                                                        | Description                                                                                          |
-| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `post_rpc(url, creds, session_id, method, args)`                | Single HTTP POST with a 10 s timeout. Returns `Err(SessionRotated)` on 409, `Err(AuthError)` on 401. |
-| `session_get(url, creds, session_id)`                           | Connectivity probe. Handles one automatic session rotation. Returns `SessionInfo { session_id }`.    |
-| `torrent_get(url, creds, session_id)`                           | Fetches the full torrent list (`id`, `name`, `status`, `percentDone`).                               |
-| `torrent_start(url, creds, session_id, id)`                     | Resumes the torrent with the given ID (`torrent-start`).                                             |
-| `torrent_stop(url, creds, session_id, id)`                      | Pauses the torrent with the given ID (`torrent-stop`).                                               |
-| `torrent_remove(url, creds, session_id, id, delete_local_data)` | Removes the torrent; when `delete_local_data=true` also deletes downloaded files.                    |
+| Function                                                        | Description                                                                                                                                                                                                                                                                                                                                                       |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `post_rpc(url, creds, session_id, method, args, timeout)`       | Single HTTP POST. Returns `Err(SessionRotated)` on 409, `Err(AuthError)` on 401. Timeout is caller-supplied (10 s standard, 60 s for `torrent-add`).                                                                                                                                                                                                              |
+| `session_get(url, creds, session_id)`                           | Connectivity probe. Handles one automatic session rotation. Returns `SessionInfo { session_id }`. Called directly from `Task::perform()` on the connection screen.                                                                                                                                                                                                |
+| `torrent_get(url, creds, session_id)`                           | Fetches the full torrent list (`id`, `name`, `status`, `percentDone`).                                                                                                                                                                                                                                                                                            |
+| `torrent_start(url, creds, session_id, id)`                     | Resumes the torrent with the given ID (`torrent-start`).                                                                                                                                                                                                                                                                                                          |
+| `torrent_stop(url, creds, session_id, id)`                      | Pauses the torrent with the given ID (`torrent-stop`).                                                                                                                                                                                                                                                                                                            |
+| `torrent_remove(url, creds, session_id, id, delete_local_data)` | Removes the torrent; when `delete_local_data=true` also deletes downloaded files.                                                                                                                                                                                                                                                                                 |
+| `torrent_add(url, creds, session_id, payload, download_dir)`    | Adds a torrent via `AddPayload::Magnet(uri)` or `AddPayload::Metainfo(base64)`. Optional `download_dir` sets the destination; empty/`None` uses the daemon default. Both `"success"` and `"torrent-duplicate"` results are treated as `Ok(())`. Uses a 60 s timeout because Transmission does synchronous disk I/O (preallocation, hash-check) before responding. |
+| `execute_work(work: RpcWork)`                                   | Executes one `RpcWork` item and returns `(Option<String>, RpcResult)`. The `Option<String>` carries a new session ID when 409 rotation occurred (it retried automatically). Called exclusively by the RPC worker loop.                                                                                                                                            |
 
 **Session-Id lifecycle:** Transmission uses `X-Transmission-Session-Id` as a lightweight CSRF
 token. On startup (or after rotation) the daemon returns 409 with the new ID in a response header.
-`session_get` retries once automatically; `torrent_get` surfaces `RpcError::SessionRotated(new_id)`
-to the caller, which maps it to `Message::SessionIdRotated` for the main screen to handle.
+`session_get` retries once automatically. The main-screen worker calls `execute_work`, which also
+retries once on rotation and emits `Message::SessionIdRotated` to persist the new ID.
 
-**Timeout:** `reqwest::Client` is built with a 10 s timeout so a non-responding daemon surfaces an
-error quickly rather than hanging indefinitely.
+**Timeouts:** `post_rpc` accepts a caller-supplied `Duration`. Standard calls use 10 s;
+`torrent_add` uses 60 s — Transmission 3.x and 4.x perform synchronous disk work before replying,
+and dropping the connection mid-response permanently wedges the single-threaded RPC socket handler.
+
+### 3.6a Serialized RPC Worker
+
+All calls to the daemon from the main screen are serialized through an MPSC channel worker
+implemented as an `iced::Subscription`.
+
+**Why:** Transmission's RPC server (both 3.x and 4.x) does not handle concurrent connections
+robustly. A second HTTP connection arriving while the first is in-flight (e.g. a poll tick firing
+during a slow `torrent-add`) can permanently wedge the socket handler. The worker guarantees at
+most one in-flight HTTP connection at any time, with deterministic submission order.
+
+**Architecture:**
+
+```text
+  update() [synchronous]
+      │
+      │  tx.try_send(RpcWork::TorrentGet { … })
+      │  tx.try_send(RpcWork::TorrentAdd { … })
+      ▼
+  tokio::sync::mpsc::channel(32) — FIFO queue
+      │
+      ▼
+  rpc_worker_stream() [iced::Subscription]
+      │  loop:
+      │    work = rx.recv().await          // blocks until work arrives
+      │    (new_sid, result) = execute_work(work).await
+      │    if new_sid: emit SessionIdRotated
+      │    emit TorrentsUpdated | ActionCompleted | AddCompleted
+      ▼
+  Message → update()
+```
+
+**Key types:**
+
+```rust
+// Work item: one variant per RPC call, carries all required params.
+pub enum RpcWork {
+    TorrentGet   { url, credentials, session_id },
+    TorrentStart { url, credentials, session_id, id },
+    TorrentStop  { url, credentials, session_id, id },
+    TorrentRemove{ url, credentials, session_id, id, delete_local_data },
+    TorrentAdd   { url, credentials, session_id, payload, download_dir },
+}
+
+// Typed outcome returned by execute_work.
+pub enum RpcResult {
+    TorrentsLoaded(Result<Vec<TorrentData>, RpcError>),
+    ActionDone(Result<(), RpcError>),
+    TorrentAdded(Result<(), RpcError>),
+}
+```
+
+**`MainScreen` integration:**
+
+- `MainScreen.sender: Option<tokio::sync::mpsc::Sender<RpcWork>>` — populated when `Message::RpcWorkerReady` arrives from the subscription.
+- `MainScreen::enqueue(work)` — calls `tx.try_send(work)`; logs an error if the 32-item buffer is full (unreachable under normal usage).
+- `MainScreen::enqueue_torrent_get()` — convenience wrapper used by `Tick` and post-action refresh.
+- `is_loading` remains as an **efficiency guard only**: when `true`, incoming `Tick` messages are dropped so the queue doesn't accumulate redundant poll requests. It no longer provides the serialization invariant.
 
 ### 3.7 Data Models
 
@@ -171,6 +241,31 @@ pub struct TorrentData {
     pub name: String,
     pub status: i32,       // 0=Stopped 1=QueueCheck 2=Checking 3=QueueDL 4=DL 5=QueueSeed 6=Seeding
     pub percent_done: f64, // [0.0, 1.0]
+}
+
+// Payload discriminator for torrent-add
+pub enum AddPayload {
+    Magnet(String),   // sent as "filename"
+    Metainfo(String), // Base64-encoded .torrent bytes, sent as "metainfo"
+}
+
+// File entry extracted from a .torrent file for the add dialog preview
+pub struct TorrentFileInfo {
+    pub path: String,
+    pub size_bytes: u64,
+}
+
+// Result of reading + parsing a .torrent file; payload of TorrentFileRead
+pub struct FileReadResult {
+    pub metainfo_b64: String,
+    pub files: Vec<TorrentFileInfo>,
+}
+
+// Add-torrent modal dialog state (lives in MainScreen)
+pub enum AddDialogState {
+    Hidden,
+    AddLink { magnet: String, destination: String, error: Option<String> },
+    AddFile { metainfo_b64: String, files: Vec<TorrentFileInfo>, destination: String, error: Option<String> },
 }
 ```
 
@@ -201,6 +296,21 @@ pub enum Message {
     DeleteCancelled,
     ActionCompleted(Result<(), String>),
 
+    // Main screen — add torrent (v0.3)
+    AddTorrentClicked,
+    TorrentFileRead(Result<FileReadResult, String>),
+    AddLinkClicked,
+    AddDialogMagnetChanged(String),
+    AddDialogDestinationChanged(String),
+    AddConfirmed,
+    AddCancelled,
+    AddCompleted(Result<(), String>),
+
+    // RPC worker subscription (v0.3 hardening)
+    /// Emitted once by the worker subscription on startup.
+    /// The sender is stored in MainScreen and used for all subsequent RPC calls.
+    RpcWorkerReady(tokio::sync::mpsc::Sender<rpc::RpcWork>),
+
     // Screen-agnostic
     Disconnect,
 }
@@ -227,17 +337,21 @@ Structured logging via `tracing` 0.1 + `tracing-subscriber` 0.3. Initialised in 
 | `serde` + `serde_json` | 1       | RPC payload serialization / deserialization           |
 | `tracing`              | 0.1     | Structured logging instrumentation                    |
 | `tracing-subscriber`   | 0.3     | Log formatting and `RUST_LOG` env-filter              |
+| `rfd`                  | 0.15    | Native async file picker dialog                       |
+| `base64`               | 0.22    | Base64 encoding of `.torrent` file bytes              |
+| `lava_torrent`         | 0.11    | Local `.torrent` file parsing (file list + sizes)     |
 | `wiremock` _(dev)_     | 0.6     | In-process HTTP mock server for RPC integration tests |
 
 ### 3.11 Test Coverage
 
-35 tests, all passing. Two layers:
+48 tests, all passing. Two layers:
 
 - **Unit tests** (`screens/connection.rs`, `screens/main_screen.rs`): exercise `update()` logic
   entirely in-memory, no async I/O.
 - **Integration tests** (`rpc.rs`): use `wiremock` to stand up a real in-process HTTP server and
   verify the full RPC round-trip including 409 rotation, 401 auth errors, parse errors, and happy
-  paths for `session_get`, `torrent_get`, `torrent_start`, `torrent_stop`, and `torrent_remove`.
+  paths for `session_get`, `torrent_get`, `torrent_start`, `torrent_stop`, `torrent_remove`, and
+  `torrent_add` (magnet, metainfo, duplicate, empty `download_dir`, rotation, auth error).
 
 ---
 
@@ -259,17 +373,25 @@ Wire up the toolbar buttons that are currently rendered but disabled.
 - New messages: `TorrentSelected(i64)`, `PauseClicked`, `ResumeClicked`, `DeleteClicked`,
   `DeleteLocalDataToggled(bool)`, `DeleteConfirmed`, `DeleteCancelled`, `ActionCompleted(Result<(), String>)`.
 
-### v0.3 — Add Torrents
+### ~~v0.3 — Add Torrents~~ ✓ Shipped
 
 Allow users to add new torrents to the daemon.
 
-- **Magnet links:** A text input in the toolbar accepts a magnet URI; submitting fires `torrent-add`
-  with the `filename` field.
-- **`.torrent` files:** A file-picker button (via `rfd` — pure-Rust native dialog) reads the file,
-  Base64-encodes it, and passes it to `torrent-add` via the `metainfo` field.
-- New crates: `rfd` (file dialog), `base64` (encoding).
-- New message: `AddMagnetSubmitted(String)`, `TorrentFileSelected(Option<PathBuf>)`,
-  `AddCompleted(Result<(), String>)`.
+- **Add Torrent button** in the toolbar opens a native file picker (via `rfd`). The selected
+  `.torrent` file is read, Base64-encoded, and parsed locally with `lava_torrent` (file list
+  extraction) — all in a single `Task::perform`.
+- **Add Link button** in the toolbar opens the add dialog in magnet-link mode.
+- **Unified add-torrent modal dialog** rendered via `iced::widget::stack`: destination folder
+  text input, scrollable file list preview (name + human-readable size), Add/Cancel buttons,
+  inline error label.
+- **Magnet links:** no file preview (metadata unavailable before peer connection); a static
+  note is shown in the file list area.
+- **`torrent_add` RPC function** with `AddPayload` enum (`Magnet` / `Metainfo`) and optional
+  `download_dir`; treats `"torrent-duplicate"` as success.
+- Immediate list refresh after a successful add.
+- New messages: `AddTorrentClicked`, `TorrentFileRead(Result<FileReadResult, String>)`,
+  `AddLinkClicked`, `AddDialogMagnetChanged(String)`, `AddDialogDestinationChanged(String)`,
+  `AddConfirmed`, `AddCancelled`, `AddCompleted(Result<(), String>)`.
 
 ### v0.4 — Detail Inspector
 

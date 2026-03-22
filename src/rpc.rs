@@ -128,15 +128,20 @@ struct RpcResponse {
 ///
 /// This function performs exactly one HTTP request. It does **not** retry on
 /// session rotation — that responsibility belongs to the caller.
+///
+/// `timeout` overrides the default 10-second transport timeout. Use a longer
+/// value for operations (e.g. `torrent-add`) where the daemon may block on
+/// disk I/O before returning a response.
 async fn post_rpc(
     url: &str,
     credentials: &TransmissionCredentials,
     session_id: &str,
     method: &str,
     arguments: Option<serde_json::Value>,
+    timeout: Duration,
 ) -> Result<RpcResponse, RpcError> {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
+        .timeout(timeout)
         .build()
         .unwrap_or_default();
     let body = RpcRequest { method, arguments };
@@ -221,7 +226,16 @@ pub async fn session_get(
     session_id: &str,
 ) -> Result<SessionInfo, RpcError> {
     tracing::debug!(%url, "Probing daemon with session-get");
-    match post_rpc(url, credentials, session_id, "session-get", None).await {
+    match post_rpc(
+        url,
+        credentials,
+        session_id,
+        "session-get",
+        None,
+        Duration::from_secs(10),
+    )
+    .await
+    {
         Ok(_) => {
             tracing::info!(%url, %session_id, "session-get probe succeeded");
             Ok(SessionInfo {
@@ -230,7 +244,16 @@ pub async fn session_get(
         }
         Err(RpcError::SessionRotated(new_id)) => {
             tracing::debug!(%url, new_id = %new_id, "Session ID rotated during probe, retrying once");
-            match post_rpc(url, credentials, &new_id, "session-get", None).await {
+            match post_rpc(
+                url,
+                credentials,
+                &new_id,
+                "session-get",
+                None,
+                Duration::from_secs(10),
+            )
+            .await
+            {
                 Ok(_) => {
                     tracing::info!(%url, session_id = %new_id, "session-get probe succeeded after session rotation");
                     Ok(SessionInfo { session_id: new_id })
@@ -274,7 +297,15 @@ pub async fn torrent_get(
         "fields": ["id", "name", "status", "percentDone"]
     });
 
-    let resp = post_rpc(url, credentials, session_id, "torrent-get", Some(args)).await?;
+    let resp = post_rpc(
+        url,
+        credentials,
+        session_id,
+        "torrent-get",
+        Some(args),
+        Duration::from_secs(10),
+    )
+    .await?;
 
     let torrents: Vec<TorrentData> = serde_json::from_value(resp.arguments["torrents"].clone())
         .map_err(|e| {
@@ -305,7 +336,15 @@ pub async fn torrent_start(
 ) -> Result<(), RpcError> {
     tracing::debug!(%url, %session_id, id, "Sending torrent-start");
     let args = serde_json::json!({ "ids": [id] });
-    let resp = post_rpc(url, credentials, session_id, "torrent-start", Some(args)).await?;
+    let resp = post_rpc(
+        url,
+        credentials,
+        session_id,
+        "torrent-start",
+        Some(args),
+        Duration::from_secs(10),
+    )
+    .await?;
     if resp.result == "success" {
         tracing::info!(id, "torrent-start succeeded");
         Ok(())
@@ -334,7 +373,15 @@ pub async fn torrent_stop(
 ) -> Result<(), RpcError> {
     tracing::debug!(%url, %session_id, id, "Sending torrent-stop");
     let args = serde_json::json!({ "ids": [id] });
-    let resp = post_rpc(url, credentials, session_id, "torrent-stop", Some(args)).await?;
+    let resp = post_rpc(
+        url,
+        credentials,
+        session_id,
+        "torrent-stop",
+        Some(args),
+        Duration::from_secs(10),
+    )
+    .await?;
     if resp.result == "success" {
         tracing::info!(id, "torrent-stop succeeded");
         Ok(())
@@ -367,7 +414,15 @@ pub async fn torrent_remove(
 ) -> Result<(), RpcError> {
     tracing::debug!(%url, %session_id, id, delete_local_data, "Sending torrent-remove");
     let args = serde_json::json!({ "ids": [id], "delete-local-data": delete_local_data });
-    let resp = post_rpc(url, credentials, session_id, "torrent-remove", Some(args)).await?;
+    let resp = post_rpc(
+        url,
+        credentials,
+        session_id,
+        "torrent-remove",
+        Some(args),
+        Duration::from_secs(10),
+    )
+    .await?;
     if resp.result == "success" {
         tracing::info!(id, delete_local_data, "torrent-remove succeeded");
         Ok(())
@@ -377,6 +432,207 @@ pub async fn torrent_remove(
             "torrent-remove failed: {}",
             resp.result
         )))
+    }
+}
+
+/// Payload for a `torrent-add` RPC call.
+///
+/// - `Magnet(uri)` — a magnet URI sent as the `filename` field.
+/// - `Metainfo(base64)` — a Base64-encoded `.torrent` file sent as the `metainfo` field.
+#[derive(Debug, Clone)]
+pub enum AddPayload {
+    Magnet(String),
+    Metainfo(String),
+}
+
+/// Add a new torrent to the daemon.
+///
+/// `payload` determines whether the torrent is identified by a magnet URI or
+/// by Base64-encoded `.torrent` file contents. `download_dir`, when `Some` and
+/// non-empty, sets the destination directory; otherwise the daemon uses its
+/// configured default.
+///
+/// Both `"success"` and `"torrent-duplicate"` result strings are treated as
+/// `Ok(())`.
+///
+/// # Errors
+///
+/// - `RpcError::SessionRotated(new_id)` — caller must handle rotation and retry.
+/// - `RpcError::AuthError` — credentials rejected.
+/// - `RpcError::ConnectionError(_)` — daemon unreachable.
+/// - `RpcError::ParseError(_)` — daemon returned an unexpected result string.
+pub async fn torrent_add(
+    url: &str,
+    credentials: &TransmissionCredentials,
+    session_id: &str,
+    payload: AddPayload,
+    download_dir: Option<String>,
+) -> Result<(), RpcError> {
+    tracing::debug!(%url, %session_id, "Sending torrent-add");
+    let mut args = match &payload {
+        AddPayload::Magnet(uri) => serde_json::json!({ "filename": uri }),
+        AddPayload::Metainfo(b64) => serde_json::json!({ "metainfo": b64 }),
+    };
+    if let Some(dir) = download_dir.as_deref().filter(|d| !d.is_empty()) {
+        args["download-dir"] = serde_json::Value::String(dir.to_owned());
+    }
+    // Use a 60-second timeout: Transmission 3.x performs synchronous disk work
+    // (preallocation, hash-check) before returning the torrent-add response.
+    // Dropping the connection mid-response leaves Transmission's single-threaded
+    // RPC server wedged; a longer timeout lets it finish cleanly.
+    let resp = post_rpc(
+        url,
+        credentials,
+        session_id,
+        "torrent-add",
+        Some(args),
+        Duration::from_secs(60),
+    )
+    .await?;
+    if resp.result == "success" || resp.result == "torrent-duplicate" {
+        tracing::info!(result = %resp.result, "torrent-add succeeded");
+        Ok(())
+    } else {
+        tracing::error!(result = %resp.result, "torrent-add returned non-success");
+        Err(RpcError::ParseError(format!(
+            "torrent-add failed: {}",
+            resp.result
+        )))
+    }
+}
+
+// ── Serialized-worker types ───────────────────────────────────────────────────
+
+/// A unit of work for the serialized RPC worker subscription.
+///
+/// Each variant carries all parameters needed to execute one RPC call.
+/// Items are submitted via a `tokio::sync::mpsc::Sender<RpcWork>` and processed
+/// sequentially by the background subscription, ensuring at most one HTTP
+/// connection to the daemon is in-flight at any time.
+#[derive(Debug, Clone)]
+pub enum RpcWork {
+    TorrentGet {
+        url: String,
+        credentials: TransmissionCredentials,
+        session_id: String,
+    },
+    TorrentStart {
+        url: String,
+        credentials: TransmissionCredentials,
+        session_id: String,
+        id: i64,
+    },
+    TorrentStop {
+        url: String,
+        credentials: TransmissionCredentials,
+        session_id: String,
+        id: i64,
+    },
+    TorrentRemove {
+        url: String,
+        credentials: TransmissionCredentials,
+        session_id: String,
+        id: i64,
+        delete_local_data: bool,
+    },
+    TorrentAdd {
+        url: String,
+        credentials: TransmissionCredentials,
+        session_id: String,
+        payload: AddPayload,
+        download_dir: Option<String>,
+    },
+}
+
+/// The typed outcome of one [`RpcWork`] item.
+#[derive(Debug)]
+pub enum RpcResult {
+    /// Result of a `torrent-get` call.
+    TorrentsLoaded(Result<Vec<TorrentData>, RpcError>),
+    /// Result of a `torrent-start`, `torrent-stop`, or `torrent-remove` call.
+    ActionDone(Result<(), RpcError>),
+    /// Result of a `torrent-add` call.
+    TorrentAdded(Result<(), RpcError>),
+}
+
+/// Execute one [`RpcWork`] item, retrying once transparently on session rotation.
+///
+/// Returns `(new_session_id, result)` where `new_session_id` is `Some` when the
+/// daemon returned 409. The caller must persist the new ID so future work items
+/// use it.
+pub async fn execute_work(work: RpcWork) -> (Option<String>, RpcResult) {
+    match work {
+        RpcWork::TorrentGet {
+            url,
+            credentials,
+            session_id,
+        } => match torrent_get(&url, &credentials, &session_id).await {
+            Err(RpcError::SessionRotated(new_id)) => {
+                let r = torrent_get(&url, &credentials, &new_id).await;
+                (Some(new_id), RpcResult::TorrentsLoaded(r))
+            }
+            r => (None, RpcResult::TorrentsLoaded(r)),
+        },
+        RpcWork::TorrentStart {
+            url,
+            credentials,
+            session_id,
+            id,
+        } => match torrent_start(&url, &credentials, &session_id, id).await {
+            Err(RpcError::SessionRotated(new_id)) => {
+                let r = torrent_start(&url, &credentials, &new_id, id).await;
+                (Some(new_id), RpcResult::ActionDone(r))
+            }
+            r => (None, RpcResult::ActionDone(r)),
+        },
+        RpcWork::TorrentStop {
+            url,
+            credentials,
+            session_id,
+            id,
+        } => match torrent_stop(&url, &credentials, &session_id, id).await {
+            Err(RpcError::SessionRotated(new_id)) => {
+                let r = torrent_stop(&url, &credentials, &new_id, id).await;
+                (Some(new_id), RpcResult::ActionDone(r))
+            }
+            r => (None, RpcResult::ActionDone(r)),
+        },
+        RpcWork::TorrentRemove {
+            url,
+            credentials,
+            session_id,
+            id,
+            delete_local_data,
+        } => match torrent_remove(&url, &credentials, &session_id, id, delete_local_data).await {
+            Err(RpcError::SessionRotated(new_id)) => {
+                let r = torrent_remove(&url, &credentials, &new_id, id, delete_local_data).await;
+                (Some(new_id), RpcResult::ActionDone(r))
+            }
+            r => (None, RpcResult::ActionDone(r)),
+        },
+        RpcWork::TorrentAdd {
+            url,
+            credentials,
+            session_id,
+            payload,
+            download_dir,
+        } => {
+            match torrent_add(
+                &url,
+                &credentials,
+                &session_id,
+                payload.clone(),
+                download_dir.clone(),
+            )
+            .await
+            {
+                Err(RpcError::SessionRotated(new_id)) => {
+                    let r = torrent_add(&url, &credentials, &new_id, payload, download_dir).await;
+                    (Some(new_id), RpcResult::TorrentAdded(r))
+                }
+                r => (None, RpcResult::TorrentAdded(r)),
+            }
+        }
     }
 }
 
@@ -413,7 +669,15 @@ mod tests {
 
         let creds = test_credentials();
         let url = format!("{}/transmission/rpc", server.uri());
-        let result = post_rpc(&url, &creds, "old-id", "session-get", None).await;
+        let result = post_rpc(
+            &url,
+            &creds,
+            "old-id",
+            "session-get",
+            None,
+            Duration::from_secs(10),
+        )
+        .await;
 
         assert!(
             matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "new-session-id"),
@@ -732,6 +996,158 @@ mod tests {
         let creds = test_credentials();
         let url = format!("{}/transmission/rpc", server.uri());
         let result = torrent_remove(&url, &creds, "sid", 3, false).await;
+        assert!(matches!(result, Err(RpcError::AuthError)));
+    }
+
+    // ── torrent_add tests ─────────────────────────────────────────────────────
+
+    /// torrent_add with a magnet URI returns Ok(()) on "success".
+    #[tokio::test]
+    async fn torrent_add_magnet_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "result": "success", "arguments": {} })),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_add(
+            &url,
+            &creds,
+            "sid",
+            AddPayload::Magnet("magnet:?xt=urn:btih:abc".to_owned()),
+            None,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    /// torrent_add with metainfo returns Ok(()) on "success".
+    #[tokio::test]
+    async fn torrent_add_metainfo_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "result": "success", "arguments": {} })),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_add(
+            &url,
+            &creds,
+            "sid",
+            AddPayload::Metainfo("dGVzdA==".to_owned()),
+            Some("/downloads".to_owned()),
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    /// torrent_add treats "torrent-duplicate" as Ok(()).
+    #[tokio::test]
+    async fn torrent_add_duplicate_is_ok() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({ "result": "torrent-duplicate", "arguments": {} }),
+            ))
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_add(
+            &url,
+            &creds,
+            "sid",
+            AddPayload::Magnet("magnet:?xt=urn:btih:abc".to_owned()),
+            None,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    /// torrent_add with empty download_dir omits the field (no crash).
+    #[tokio::test]
+    async fn torrent_add_empty_download_dir_omitted() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "result": "success", "arguments": {} })),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        // Empty string → download-dir should be omitted
+        let result = torrent_add(
+            &url,
+            &creds,
+            "sid",
+            AddPayload::Magnet("magnet:?xt=urn:btih:abc".to_owned()),
+            Some(String::new()),
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    /// torrent_add — 409 yields SessionRotated.
+    #[tokio::test]
+    async fn torrent_add_session_rotation() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(ResponseTemplate::new(409).insert_header(SESSION_ID_HEADER, "new-sid"))
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_add(
+            &url,
+            &creds,
+            "old-sid",
+            AddPayload::Magnet("magnet:?xt=urn:btih:abc".to_owned()),
+            None,
+        )
+        .await;
+        assert!(matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "new-sid"));
+    }
+
+    /// torrent_add — 401 yields AuthError.
+    #[tokio::test]
+    async fn torrent_add_auth_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_add(
+            &url,
+            &creds,
+            "sid",
+            AddPayload::Magnet("magnet:?xt=urn:btih:abc".to_owned()),
+            None,
+        )
+        .await;
         assert!(matches!(result, Err(RpcError::AuthError)));
     }
 }

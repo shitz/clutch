@@ -90,6 +90,28 @@ pub enum Message {
     /// Result of a `torrent-start`, `torrent-stop`, or `torrent-remove` call.
     ActionCompleted(Result<(), String>),
 
+    // -- Main screen add-torrent events (v0.3) --
+    /// User clicked the "Add Torrent" button — opens the native file picker.
+    AddTorrentClicked,
+    /// Result of opening + reading + parsing a `.torrent` file inside `Task::perform`.
+    TorrentFileRead(Result<crate::screens::main_screen::FileReadResult, String>),
+    /// User clicked the "Add Link" button — opens the magnet-link dialog.
+    AddLinkClicked,
+    /// User typed in the magnet URI field of the add dialog.
+    AddDialogMagnetChanged(String),
+    /// User edited the destination folder field of the add dialog.
+    AddDialogDestinationChanged(String),
+    /// User confirmed the add-torrent dialog.
+    AddConfirmed,
+    /// User cancelled the add-torrent dialog.
+    AddCancelled,
+    /// Result of a `torrent-add` RPC call.
+    AddCompleted(Result<(), String>),
+
+    /// The serialized RPC worker subscription has started and is ready.
+    /// Store the sender and use it for all subsequent RPC calls.
+    RpcWorkerReady(tokio::sync::mpsc::Sender<crate::rpc::RpcWork>),
+
     /// User clicked the Disconnect button on the main screen.
     /// Returns the app to the connection form.
     Disconnect,
