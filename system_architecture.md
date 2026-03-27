@@ -7,8 +7,6 @@ serves as a remote GUI for a Transmission BitTorrent daemon, communicating exclu
 Transmission JSON-RPC API. It uses the `iced` 0.14 GUI framework and follows the Elm architecture
 (Model / View / Update) using iced's free-function style.
 
-**Current status: v0.4 "Detail Inspector" — shipped and working against a real Transmission daemon.**
-
 ---
 
 ## 2. Core Non-Functional Constraints
@@ -25,21 +23,23 @@ These constraints are fixed across all versions and must never be violated:
 
 ---
 
-## 3. Implemented Architecture (v0.1)
+## 3. Architecture
 
 ### 3.1 Module Layout
 
-```
+```text
 src/
-├── main.rs               Entry point. Initialises tracing, launches iced.
-├── app.rs                AppState, Screen router, Message enum, top-level update/view/subscription.
+├── main.rs               Entry point. Initialises tracing, registers fonts, sets window constraints, launches iced.
+├── app.rs                AppState, Screen router, ThemeMode, Message enum, top-level update/view/subscription.
+├── format.rs             Shared torrent data formatting helpers (size, speed, ETA, duration).
+├── theme.rs              Material Design 3 theme, Material Icons font constants, shared widget styles.
 ├── rpc.rs                Async Transmission JSON-RPC client.
 └── screens/
     ├── mod.rs
     ├── connection.rs     Connection form screen.
     ├── main_screen.rs    Parent delegating screen: composes list + inspector.
-    ├── torrent_list.rs   Torrent list sub-component (toolbar, rows, add dialog, RPC worker).
-    └── inspector.rs      Detail inspector sub-component (tabbed panel).
+    ├── torrent_list.rs   Torrent list sub-component (toolbar, 9-column header, rows, add dialog, RPC worker).
+    └── inspector.rs      Detail inspector sub-component (tabbed panel via iced_aw).
 ```
 
 ### 3.2 Elm Loop (iced 0.14 free-function style)
@@ -50,12 +50,16 @@ iced 0.14 uses free functions instead of the `Application` trait. The entry poin
 iced::application(AppState::new, update, view)
     .title("Clutch")
     .subscription(subscription)
+    .theme(AppState::current_theme)
+    .font(theme::MATERIAL_ICONS_BYTES)
+    .font(iced_aw::ICED_AW_FONT_BYTES)
+    .window(window::Settings { min_size: Some(Size { width: 900.0, height: 500.0 }), ..Default::default() })
     .run()
 ```
 
 | Elm role          | Implementation                                                   |
 | ----------------- | ---------------------------------------------------------------- |
-| **Model**         | `AppState { screen: Screen }`                                    |
+| **Model**         | `AppState { screen: Screen, theme: ThemeMode }`                  |
 | **View**          | `fn view(state: &AppState) -> Element<'_, Message>`              |
 | **Update**        | `fn update(state: &mut AppState, msg: Message) -> Task<Message>` |
 | **Effects**       | `Task<Message>` (replaces iced 0.13's `Command`)                 |
@@ -72,13 +76,21 @@ pub enum Screen {
     Main(MainScreen),               // Shown after a successful session-get probe
 }
 
+/// Active theme selection: light or dark Material Design 3.
+pub enum ThemeMode { Dark, Light }
+
 pub struct AppState {
     pub screen: Screen,
+    pub theme: ThemeMode,  // drives current_theme() → Theme::custom()
 }
 ```
 
-`update()` dispatches `Message::Disconnect` before the screen match (it is screen-agnostic), then
-delegates all other messages to the active screen's own `update()` method.
+`update()` intercepts two global messages before the screen match:
+
+1. `Message::Main(main_screen::Message::Disconnect)` — transitions to `Screen::Connection`.
+2. `Message::Main(List(torrent_list::Message::ThemeToggled))` — toggles `AppState::theme` Dark↔Light.
+
+All other messages are delegated to the active screen's `update()`.
 
 ### 3.4 Connection Screen (`screens/connection.rs`)
 
@@ -144,23 +156,60 @@ are delegated to `inspector::update`.
 
 #### TorrentListScreen responsibilities
 
-- Sticky column header + scrollable torrent rows (Name / Status / Progress).
+- **9-column sticky header**: Name (fill), Status, Size, Downloaded, ↓ Speed, ↑ Speed, ETA, Ratio,
+  Progress. Column headers are clickable buttons that cycle sort Asc → Desc → None.
+- **Column sort**: `sort_column: Option<SortColumn>` + `sort_dir: SortDir` in state; `sort_torrents()`
+  is a pure function that returns a sorted `Vec<&TorrentData>` used by `view()`.
+- **Progress bar**: color-coded by status — green (downloading), blue (seeding), gray (all others).
+- **Icon toolbar**: Material icon buttons for Pause, Resume, Delete, Add, Add-Link, and Theme toggle.
+  The Add button is the primary action; the Theme toggle icon changes between dark_mode/light_mode
+  glyphs. Button enable/disable follows selection state.
+- **Selected row** is rendered inside an `elevated_surface` container (rounded corners, drop shadow).
 - Polling the daemon every **1 second** via an `iced::time::every` subscription.
 - Serializing all RPC calls through the MPSC worker subscription (see §3.6a).
-- `is_loading` efficiency guard, session-id rotation, toolbar actions, delete confirmation row,
-  add-torrent and add-link flows — all unchanged.
+- `is_loading` efficiency guard, session-id rotation, delete confirmation row, and add-torrent / add-link flows.
 - `selected_torrent() -> Option<&TorrentData>` — exposes the currently selected torrent to parent.
 - `Message::Disconnect` variant (never processed by `update`; intercepted by parent).
+- `Message::ThemeToggled` variant (never processed by `update`; intercepted by `app::update`).
 
-#### InspectorScreen responsibilities (new in v0.4)
+#### InspectorScreen responsibilities
 
 - Renders the detail panel for the torrent passed in from the parent via `inspector::view(state, torrent)`.
 - Maintains `active_tab: ActiveTab` (default `General`).
 - `update()` handles `Message::TabSelected(tab)` only.
-- Four tabs — **General**, **Files**, **Trackers**, **Peers** — each rendered by a dedicated
-  private function.
-- Formatting helpers: `format_size(i64)`, `format_speed(i64)`, `format_eta(i64)`, `format_ago(i64)`.
-  All return `"—"` for sentinel values (`-1` / `0` where semantically absent).
+- **Tab bar** implemented with `iced_aw::Tabs` widget (requires `iced_aw` 0.13 `tabs` feature and
+  `iced_aw::ICED_AW_FONT_BYTES` registered in `main.rs`).
+- Four tabs — **General**, **Files**, **Trackers**, **Peers** — each rendered by a dedicated private function.
+- The panel is wrapped in an `inspector_surface` container (rounded top corners, subtle shadow).
+- Formatting is delegated to `crate::format`: `format_size`, `format_speed`, `format_eta`, `format_ago`.
+
+#### `format.rs` — Formatting helpers
+
+Shared formatting utilities extracted into a top-level module so both the inspector and torrent list can use them.
+
+| Function       | Input       | Example output | Sentinel behaviour         |
+| -------------- | ----------- | -------------- | -------------------------- |
+| `format_size`  | `i64` bytes | `"2.4 GB"`     | `≤0 → "0 B"`               |
+| `format_speed` | `i64` Bps   | `"1.2 MB/s"`   | `≤0 → "—"` (idle / paused) |
+| `format_eta`   | `i64` secs  | `"3h 21m"`     | `-1 → "—"`                 |
+| `format_ago`   | `i64` epoch | `"5m ago"`     | `≤0 → "—"`                 |
+
+#### `theme.rs` — Material Design 3 theme
+
+All styling in one file, used by every screen.
+
+- **`MATERIAL_ICONS_BYTES`**: raw bytes of the bundled `fonts/MaterialIcons-Regular.ttf`.
+- **`MATERIAL_ICONS`**: `Font::with_name("Material Icons")`.
+- **Icon constants**: `ICON_PAUSE`, `ICON_PLAY`, `ICON_DELETE`, `ICON_ADD`, `ICON_LINK`,
+  `ICON_DARK_MODE`, `ICON_LIGHT_MODE`.
+- **`icon(codepoint)`**: returns a 22 px `Text` widget rendered in the Material Icons font.
+- **`material_dark_theme()`** / **`material_light_theme()`**: return `Theme::custom()` with
+  Material Design 3 palettes (#1C1B1F dark surface, #FFFBFE light background).
+- **`elevated_surface(&Theme)`**: card-like container style (12px radius, drop shadow). Detects
+  dark/light via `theme.extended_palette().background.base.color`.
+- **`inspector_surface(&Theme)`**: inspector panel style (rounded top corners, subtle upward shadow).
+- **`progress_bar_style(status: i32)`**: returns a closure for `progress_bar::Style` colourised by
+  Transmission status code (4=green, 6=blue, else gray).
 
 ### 3.6 RPC Client (`rpc.rs`)
 
@@ -256,13 +305,28 @@ pub struct TransmissionCredentials {
     pub password: Option<String>,
 }
 
-// One row in the torrent list
+// One row in the torrent list (all fields fetched in torrent-get)
 pub struct TorrentData {
     pub id: i64,
     pub name: String,
-    pub status: i32,       // 0=Stopped 1=QueueCheck 2=Checking 3=QueueDL 4=DL 5=QueueSeed 6=Seeding
-    pub percent_done: f64, // [0.0, 1.0]
+    pub status: i32,          // 0=Stopped 1=QueueCheck 2=Checking 3=QueueDL 4=DL 5=QueueSeed 6=Seeding
+    pub percent_done: f64,    // [0.0, 1.0]
+    pub total_size: i64,      // bytes
+    pub downloaded_ever: i64, // bytes
+    pub uploaded_ever: i64,   // bytes
+    pub upload_ratio: f64,
+    pub eta: i64,             // seconds; -1 = unknown
+    pub rate_download: i64,   // bytes/s
+    pub rate_upload: i64,     // bytes/s
+    pub files: Vec<TorrentFile>,
+    pub file_stats: Vec<TorrentFileStat>,
+    pub tracker_stats: Vec<TrackerStat>,
+    pub peers: Vec<Peer>,
 }
+
+// Sort state for TorrentListScreen
+pub enum SortColumn { Name, Status, Size, Downloaded, SpeedDown, SpeedUp, Eta, Ratio, Progress }
+pub enum SortDir { Asc, Desc }
 
 // Payload discriminator for torrent-add
 pub enum AddPayload {
@@ -282,7 +346,7 @@ pub struct FileReadResult {
     pub files: Vec<TorrentFileInfo>,
 }
 
-// Add-torrent modal dialog state (lives in MainScreen)
+// Add-torrent modal dialog state (lives in TorrentListScreen)
 pub enum AddDialogState {
     Hidden,
     AddLink { magnet: String, destination: String, error: Option<String> },
@@ -290,9 +354,9 @@ pub enum AddDialogState {
 }
 ```
 
-### 3.8 Message Enum (implemented)
+### 3.8 Message Enum
 
-`app::Message` is now minimal — all main-screen events are nested under `Main`:
+`app::Message` is minimal — all main-screen events are nested under `Main`:
 
 ```rust
 pub enum Message {
@@ -315,7 +379,7 @@ pub enum main_screen::Message {
     Disconnect, // escalated from List(TorrentListMessage::Disconnect)
 }
 
-// torrent_list::Message — polling, actions, add-torrent dialog
+// torrent_list::Message — polling, actions, add-torrent dialog, sort, theme
 pub enum torrent_list::Message {
     Tick,
     TorrentsUpdated(Result<Vec<TorrentData>, String>),
@@ -331,7 +395,9 @@ pub enum torrent_list::Message {
     AddDialogMagnetChanged(String), AddDialogDestinationChanged(String),
     AddConfirmed, AddCancelled,
     AddCompleted(Result<(), String>),
-    Disconnect, // intercepted by parent, never processed by update()
+    ColumnHeaderClicked(SortColumn), // cycles sort: None → Asc → Desc → None
+    ThemeToggled,   // intercepted by app::update; never processed by torrent_list::update
+    Disconnect,     // intercepted by main_screen::update; never processed by torrent_list::update
 }
 
 // inspector::Message
@@ -351,11 +417,12 @@ Structured logging via `tracing` 0.1 + `tracing-subscriber` 0.3. Initialised in 
 | `info!`  | Connect attempted/succeeded, disconnect, torrent list refreshed                                                     |
 | `debug!` | Every outgoing request (url, method, session_id), every response status, session rotation details, tick guard skips |
 
-### 3.10 Crate Stack (current)
+### 3.10 Crate Stack
 
 | Crate                  | Version | Purpose                                               |
 | ---------------------- | ------- | ----------------------------------------------------- |
 | `iced`                 | 0.14    | GUI framework (features: `tokio`, `canvas`, `image`)  |
+| `iced_aw`              | 0.13    | iced add-on widgets: `Tabs` (feature: `tabs`)         |
 | `tokio`                | 1       | Async runtime (via iced's built-in integration)       |
 | `reqwest`              | 0.12    | HTTP client for RPC calls (feature: `json`)           |
 | `serde` + `serde_json` | 1       | RPC payload serialization / deserialization           |
@@ -368,17 +435,19 @@ Structured logging via `tracing` 0.1 + `tracing-subscriber` 0.3. Initialised in 
 
 ### 3.11 Test Coverage
 
-69 tests, all passing. Three layers:
+81 tests, all passing. Three layers:
 
 - **Unit tests** (`screens/connection.rs`, `screens/torrent_list.rs`, `screens/main_screen.rs`,
-  `screens/inspector.rs`): exercise `update()` logic entirely in-memory, no async I/O.
-  The inspector module includes 15 unit tests covering all formatting helpers and tab switching.
+  `screens/inspector.rs`, `format.rs`): exercise `update()` logic and formatting helpers entirely
+  in-memory, no async I/O.
+  The inspector module includes tests covering tab switching.
   The main screen tests verify tab-reset behaviour and the inspector visibility invariant.
+  `format.rs` has dedicated tests for all formatting functions, including sentinel `"\u2014"` return values.
 - **Integration tests** (`rpc.rs`): use `wiremock` to stand up a real in-process HTTP server and
   verify the full RPC round-trip including 409 rotation, 401 auth errors, parse errors, and happy
   paths for `session_get`, `torrent_get`, `torrent_start`, `torrent_stop`, `torrent_remove`, and
   `torrent_add` (magnet, metainfo, duplicate, empty `download_dir`, rotation, auth error).
-  A dedicated integration test verifies all extended `torrent_get` fields added in v0.4.
+  A dedicated integration test verifies all extended `torrent_get` fields.
 
 ---
 
@@ -386,73 +455,12 @@ Structured logging via `tracing` 0.1 + `tracing-subscriber` 0.3. Initialised in 
 
 Each milestone is a vertical slice: the app remains shippable after every version.
 
-### ~~v0.2 — Torrent Control~~ ✓ Shipped
-
-Wire up the toolbar buttons that are currently rendered but disabled.
-
-- `torrent-start` / `torrent-stop` RPC calls mapped to Pause / Resume buttons.
-- `torrent-remove` (with `delete-local-data` flag) mapped to Delete button.
-- Torrent selection: clicking a row highlights it and enables the relevant toolbar buttons.
-  Selection state lives in `MainScreen` as `selected_id: Option<i64>`.
-- Delete confirmation row: clicking Delete shows an inline row with a "Delete local data"
-  checkbox and Confirm/Cancel buttons (`confirming_delete: Option<(i64, bool)>`).
-- Optimistic UI: button fires immediately, list refreshes once the action RPC completes.
-- New messages: `TorrentSelected(i64)`, `PauseClicked`, `ResumeClicked`, `DeleteClicked`,
-  `DeleteLocalDataToggled(bool)`, `DeleteConfirmed`, `DeleteCancelled`, `ActionCompleted(Result<(), String>)`.
-
-### ~~v0.3 — Add Torrents~~ ✓ Shipped
-
-Allow users to add new torrents to the daemon.
-
-- **Add Torrent button** in the toolbar opens a native file picker (via `rfd`). The selected
-  `.torrent` file is read, Base64-encoded, and parsed locally with `lava_torrent` (file list
-  extraction) — all in a single `Task::perform`.
-- **Add Link button** in the toolbar opens the add dialog in magnet-link mode.
-- **Unified add-torrent modal dialog** rendered via `iced::widget::stack`: destination folder
-  text input, scrollable file list preview (name + human-readable size), Add/Cancel buttons,
-  inline error label.
-- **Magnet links:** no file preview (metadata unavailable before peer connection); a static
-  note is shown in the file list area.
-- **`torrent_add` RPC function** with `AddPayload` enum (`Magnet` / `Metainfo`) and optional
-  `download_dir`; treats `"torrent-duplicate"` as success.
-- Immediate list refresh after a successful add.
-- New messages: `AddTorrentClicked`, `TorrentFileRead(Result<FileReadResult, String>)`,
-  `AddLinkClicked`, `AddDialogMagnetChanged(String)`, `AddDialogDestinationChanged(String)`,
-  `AddConfirmed`, `AddCancelled`, `AddCompleted(Result<(), String>)`.
-
-### ~~v0.4 — Detail Inspector~~ ✓ Shipped
-
-- **Separate Elm sub-components:** `TorrentListScreen` (`torrent_list.rs`) and `InspectorScreen`
-  (`inspector.rs`) are self-contained components. `MainScreen` (`main_screen.rs`) composes them
-  and delegates messages.
-- **Horizontal split:** when a torrent is selected the content area splits — list takes
-  `FillPortion(3)` (top 3/4), inspector takes `FillPortion(1)` (bottom 1/4). No inspector
-  rendered when nothing is selected.
-- **Inspector tabs:** General, Files, Trackers, Peers. The active tab resets to General whenever
-  a different torrent is selected.
-- **General tab:** name, total size, downloaded, uploaded, ratio, ETA, download/upload speeds.
-- **Files tab:** scrollable file list with per-file progress bars.
-- **Trackers tab:** host, seeder count, leecher count, last announce time.
-- **Peers tab:** IP, client string, upload/download rate.
-- **New RPC fields:** `totalSize`, `downloadedEver`, `uploadedEver`, `uploadRatio`, `eta`,
-  `rateDownload`, `rateUpload`, `files`, `fileStats`, `trackerStats`, `peers`.
-- **Polling interval:** reduced to **1 s** (from 5 s) to show live transfer speeds.
-
-### v0.5 — Extended Torrent List Columns
-
-Expand the list view with additional columns visible in v0.4's data.
-
-- New columns: Size, Downloaded, ↓ Speed, ↑ Speed, ETA, Ratio.
-- Column visibility toggle (a settings popover or context menu).
-- Column sort: clicking a header sorts ascending/descending.
-
 ### v1.0 — Polish & Settings
 
 - **Settings persistence:** Save connection profiles and UI preferences to a config file (via
   `directories` + `toml` or `serde_json`).
 - **Multiple connection profiles:** A dropdown on the connection screen to select saved daemons.
 - **Polling interval:** Configurable (1–30 s) with a sensible default of 1 s.
-- **Theme:** Light / dark mode toggle via iced's built-in theme system.
 - **Error recovery:** Automatic reconnect with exponential back-off when the daemon becomes
   unreachable while the main screen is active.
 - **CI:** GitHub Actions workflow running `cargo test` + `cargo clippy -- -D warnings` on

@@ -141,8 +141,8 @@ PeerInfo         { address: String, client_name: String, rate_to_client: i64, ra
 
 **Decision:** Add small private formatting helpers inside `inspector.rs`:
 
-- `format_size(bytes: i64) -> String` — formats bytes as B / KiB / MiB / GiB.
-- `format_speed(bytes_per_sec: i64) -> String` — formats as B/s / KiB/s / MiB/s.
+- `format_size(bytes: i64) -> String` — formats bytes as B / KB / MB / GB.
+- `format_speed(bytes_per_sec: i64) -> String` — formats as B/s / KB/s / MB/s.
 - `format_eta(secs: i64) -> String` — formats as "∞", "Xs", "Xm Xs", "Xh Xm".
 
 No new crate dependency needed.

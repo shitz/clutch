@@ -18,22 +18,94 @@
 
 use base64::Engine as _;
 use iced::futures::SinkExt as _;
+use iced::widget::rule;
+use iced::widget::tooltip;
 use iced::widget::{
     Space, button, checkbox, column, container, progress_bar, row, scrollable, stack, text,
     text_input,
 };
-use iced::{Element, Length, Task};
+use iced::{Alignment, Element, Length, Task};
 use tokio::sync::mpsc;
 
+use crate::format::{format_eta, format_size, format_speed};
 use crate::rpc::{AddPayload, RpcWork, TorrentData, TransmissionCredentials};
+use crate::theme::{
+    ICON_ADD, ICON_DARK_MODE, ICON_DELETE, ICON_DOWNLOAD, ICON_LIGHT_MODE, ICON_LINK, ICON_LOGOUT,
+    ICON_PAUSE, ICON_PLAY, ICON_UPLOAD, icon, progress_bar_style,
+};
 
-// ── Column layout constants ───────────────────────────────────────────────────
+// ── Column layout ─────────────────────────────────────────────────────────────
 
-const COL_NAME: u16 = 5;
-const COL_STATUS: u16 = 2;
-const COL_PROGRESS: u16 = 3;
+// Fixed pixel widths for narrow numeric columns (design D9).
+const W_STATUS: f32 = 90.0;
+const W_SIZE: f32 = 80.0;
+const W_SPEED_DOWN: f32 = 90.0;
+const W_SPEED_UP: f32 = 90.0;
+const W_ETA: f32 = 80.0;
+const W_RATIO: f32 = 64.0;
+const W_PROGRESS: f32 = 130.0;
+const SCROLLBAR_WIDTH: f32 = 14.0;
+// Name column uses Length::Fill.
 
-// ── Status mapping ────────────────────────────────────────────────────────────
+// ── Sort state ────────────────────────────────────────────────────────────────
+
+/// Column that the torrent list is currently sorted by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortColumn {
+    Name,
+    Status,
+    Size,
+    SpeedDown,
+    SpeedUp,
+    Eta,
+    Ratio,
+    Progress,
+}
+
+/// Sort direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortDir {
+    #[default]
+    Asc,
+    Desc,
+}
+
+/// Apply a single-column sort over a slice of torrents.
+///
+/// Returns references in the requested order; the backing slice is unchanged.
+pub fn sort_torrents(torrents: &[TorrentData], col: SortColumn, dir: SortDir) -> Vec<&TorrentData> {
+    let mut sorted: Vec<&TorrentData> = torrents.iter().collect();
+    sorted.sort_by(|a, b| {
+        let ord = match col {
+            SortColumn::Name => a.name.cmp(&b.name),
+            SortColumn::Status => a.status.cmp(&b.status),
+            SortColumn::Size => a.total_size.cmp(&b.total_size),
+            SortColumn::SpeedDown => a.rate_download.cmp(&b.rate_download),
+            SortColumn::SpeedUp => a.rate_upload.cmp(&b.rate_upload),
+            SortColumn::Eta => {
+                // -1 = unknown; sort unknown ETAs to the end.
+                let ea = if a.eta < 0 { i64::MAX } else { a.eta };
+                let eb = if b.eta < 0 { i64::MAX } else { b.eta };
+                ea.cmp(&eb)
+            }
+            SortColumn::Ratio => {
+                let ra = a.upload_ratio.max(0.0);
+                let rb = b.upload_ratio.max(0.0);
+                ra.partial_cmp(&rb).unwrap_or(std::cmp::Ordering::Equal)
+            }
+            SortColumn::Progress => a
+                .percent_done
+                .partial_cmp(&b.percent_done)
+                .unwrap_or(std::cmp::Ordering::Equal),
+        };
+        if dir == SortDir::Desc {
+            ord.reverse()
+        } else {
+            ord
+        }
+    });
+    sorted
+}
 
 fn status_label(status: i32) -> &'static str {
     match status {
@@ -129,6 +201,10 @@ pub enum Message {
     AddCompleted(Result<(), String>),
     // Escalated to parent — intercepted by MainScreen before reaching update()
     Disconnect,
+    // Escalated to app — intercepted by app::update via MainScreen
+    ThemeToggled,
+    // Column sort
+    ColumnHeaderClicked(SortColumn),
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -145,6 +221,10 @@ pub struct TorrentListScreen {
     pub selected_id: Option<i64>,
     pub confirming_delete: Option<(i64, bool)>,
     pub add_dialog: AddDialogState,
+    /// Active sort column (if any).
+    pub sort_column: Option<SortColumn>,
+    /// Sort direction (Asc when `sort_column` is None, irrelevant).
+    pub sort_dir: SortDir,
 }
 
 impl TorrentListScreen {
@@ -159,6 +239,8 @@ impl TorrentListScreen {
             confirming_delete: None,
             add_dialog: AddDialogState::Hidden,
             sender: None,
+            sort_column: None,
+            sort_dir: SortDir::Asc,
         }
     }
 
@@ -493,10 +575,29 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
 
         // Disconnect is intercepted by the parent before reaching here.
         Message::Disconnect => Task::none(),
+        // ThemeToggled is intercepted by app::update, never reaches here.
+        Message::ThemeToggled => Task::none(),
+
+        // ── Column sort ───────────────────────────────────────────────────────
+        Message::ColumnHeaderClicked(col) => {
+            match &state.sort_column {
+                // Same column: cycle Asc → Desc → None
+                Some(current) if *current == col => match state.sort_dir {
+                    SortDir::Asc => state.sort_dir = SortDir::Desc,
+                    SortDir::Desc => state.sort_column = None,
+                },
+                // Different column or no sort: start ascending on the clicked column
+                _ => {
+                    state.sort_column = Some(col);
+                    state.sort_dir = SortDir::Asc;
+                }
+            }
+            Task::none()
+        }
     }
 }
 
-pub fn view(state: &TorrentListScreen) -> Element<'_, Message> {
+pub fn view(state: &TorrentListScreen, theme_mode: crate::app::ThemeMode) -> Element<'_, Message> {
     // ── Toolbar ───────────────────────────────────────────────────────────────
     let toolbar: Element<Message> = if let Some((del_id, del_local)) = state.confirming_delete {
         let name = state
@@ -529,8 +630,55 @@ pub fn view(state: &TorrentListScreen) -> Element<'_, Message> {
         let can_resume = selected.is_some_and(|t| t.status == 0);
         let can_delete = state.selected_id.is_some();
 
+        let theme_icon = if theme_mode == crate::app::ThemeMode::Dark {
+            ICON_LIGHT_MODE
+        } else {
+            ICON_DARK_MODE
+        };
+        let theme_hint = if theme_mode == crate::app::ThemeMode::Dark {
+            "Switch to light mode"
+        } else {
+            "Switch to dark mode"
+        };
+        // Determine which secondary button style to use — dim in dark mode.
+        let sec_style: fn(
+            &iced::Theme,
+            iced::widget::button::Status,
+        ) -> iced::widget::button::Style = if theme_mode == crate::app::ThemeMode::Dark {
+            crate::theme::dim_secondary
+        } else {
+            iced::widget::button::secondary
+        };
+
+        // ── Group 1: Add actions ──────────────────────────────────────────────
+        let group1: Element<Message> = row![
+            tooltip(
+                button(icon(ICON_ADD))
+                    .on_press(Message::AddTorrentClicked)
+                    .style(iced::widget::button::primary)
+                    .padding([4, 6]),
+                text("Add torrent from file"),
+                tooltip::Position::Bottom,
+            )
+            .gap(6)
+            .style(container::rounded_box),
+            tooltip(
+                button(icon(ICON_LINK))
+                    .on_press(Message::AddLinkClicked)
+                    .style(sec_style)
+                    .padding([4, 6]),
+                text("Add torrent from magnet link"),
+                tooltip::Position::Bottom,
+            )
+            .gap(6)
+            .style(container::rounded_box),
+        ]
+        .spacing(4)
+        .into();
+
+        // ── Group 2: Torrent actions ──────────────────────────────────────────
         let pause_btn = {
-            let b = button("Pause").style(iced::widget::button::secondary);
+            let b = button(icon(ICON_PAUSE)).style(sec_style).padding([4, 6]);
             if can_pause {
                 b.on_press(Message::PauseClicked)
             } else {
@@ -538,7 +686,7 @@ pub fn view(state: &TorrentListScreen) -> Element<'_, Message> {
             }
         };
         let resume_btn = {
-            let b = button("Resume").style(iced::widget::button::secondary);
+            let b = button(icon(ICON_PLAY)).style(sec_style).padding([4, 6]);
             if can_resume {
                 b.on_press(Message::ResumeClicked)
             } else {
@@ -546,27 +694,62 @@ pub fn view(state: &TorrentListScreen) -> Element<'_, Message> {
             }
         };
         let delete_btn = {
-            let b = button("Delete").style(iced::widget::button::secondary);
+            let b = button(icon(ICON_DELETE)).style(sec_style).padding([4, 6]);
             if can_delete {
                 b.on_press(Message::DeleteClicked)
             } else {
                 b
             }
         };
-        row![
-            button("Add Torrent")
-                .on_press(Message::AddTorrentClicked)
-                .style(iced::widget::button::secondary),
-            button("Add Link")
-                .on_press(Message::AddLinkClicked)
-                .style(iced::widget::button::secondary),
-            pause_btn,
-            resume_btn,
-            delete_btn,
-            Space::new(),
-            button("Disconnect").on_press(Message::Disconnect),
+        let group2: Element<Message> = row![
+            tooltip(pause_btn, text("Pause"), tooltip::Position::Bottom)
+                .gap(6)
+                .style(container::rounded_box),
+            tooltip(resume_btn, text("Resume"), tooltip::Position::Bottom)
+                .gap(6)
+                .style(container::rounded_box),
+            tooltip(delete_btn, text("Delete"), tooltip::Position::Bottom)
+                .gap(6)
+                .style(container::rounded_box),
         ]
-        .spacing(8)
+        .spacing(4)
+        .into();
+
+        // ── Group 3: Global / right-aligned ───────────────────────────────────
+        let group3: Element<Message> = row![
+            tooltip(
+                button(icon(theme_icon))
+                    .on_press(Message::ThemeToggled)
+                    .style(sec_style)
+                    .padding([4, 6]),
+                text(theme_hint),
+                tooltip::Position::Bottom,
+            )
+            .gap(6)
+            .style(container::rounded_box),
+            tooltip(
+                button(icon(ICON_LOGOUT))
+                    .on_press(Message::Disconnect)
+                    .style(sec_style)
+                    .padding([4, 6]),
+                text("Disconnect from daemon"),
+                tooltip::Position::Bottom,
+            )
+            .gap(6)
+            .style(container::rounded_box),
+        ]
+        .spacing(4)
+        .into();
+
+        row![
+            group1,
+            Space::new().width(16),
+            group2,
+            Space::new().width(Length::Fill),
+            group3
+        ]
+        .align_y(Alignment::Center)
+        .spacing(0)
         .into()
     };
 
@@ -578,44 +761,246 @@ pub fn view(state: &TorrentListScreen) -> Element<'_, Message> {
     };
 
     // ── Sticky header ─────────────────────────────────────────────────────────
-    let header = row![
-        text("Name").width(Length::FillPortion(COL_NAME)),
-        text("Status").width(Length::FillPortion(COL_STATUS)),
-        text("Progress").width(Length::FillPortion(COL_PROGRESS)),
+    let header_row = row![
+        container(
+            tooltip(
+                col_header_btn(
+                    "NAME",
+                    SortColumn::Name,
+                    &state.sort_column,
+                    state.sort_dir,
+                    Alignment::Start,
+                )
+                .width(Length::Fill),
+                text("Sort by name"),
+                tooltip::Position::Bottom,
+            )
+            .gap(6)
+            .style(container::rounded_box),
+        )
+        .width(Length::Fill),
+        container(
+            tooltip(
+                col_header_btn(
+                    "STATUS",
+                    SortColumn::Status,
+                    &state.sort_column,
+                    state.sort_dir,
+                    Alignment::Start,
+                )
+                .width(Length::Fixed(W_STATUS)),
+                text("Sort by status"),
+                tooltip::Position::Bottom,
+            )
+            .gap(6)
+            .style(container::rounded_box),
+        )
+        .width(Length::Fixed(W_STATUS)),
+        container(
+            tooltip(
+                col_header_btn(
+                    "SIZE",
+                    SortColumn::Size,
+                    &state.sort_column,
+                    state.sort_dir,
+                    Alignment::End,
+                )
+                .width(Length::Fixed(W_SIZE)),
+                text("Total size"),
+                tooltip::Position::Bottom,
+            )
+            .gap(6)
+            .style(container::rounded_box),
+        )
+        .width(Length::Fixed(W_SIZE)),
+        container(
+            tooltip(
+                col_header_icon_btn(
+                    ICON_DOWNLOAD,
+                    SortColumn::SpeedDown,
+                    &state.sort_column,
+                    state.sort_dir,
+                    Alignment::End,
+                )
+                .width(Length::Fixed(W_SPEED_DOWN)),
+                text("Download speed"),
+                tooltip::Position::Bottom,
+            )
+            .gap(6)
+            .style(container::rounded_box),
+        )
+        .width(Length::Fixed(W_SPEED_DOWN)),
+        container(
+            tooltip(
+                col_header_icon_btn(
+                    ICON_UPLOAD,
+                    SortColumn::SpeedUp,
+                    &state.sort_column,
+                    state.sort_dir,
+                    Alignment::End,
+                )
+                .width(Length::Fixed(W_SPEED_UP)),
+                text("Upload speed"),
+                tooltip::Position::Bottom,
+            )
+            .gap(6)
+            .style(container::rounded_box),
+        )
+        .width(Length::Fixed(W_SPEED_UP)),
+        container(
+            tooltip(
+                col_header_btn(
+                    "ETA",
+                    SortColumn::Eta,
+                    &state.sort_column,
+                    state.sort_dir,
+                    Alignment::End,
+                )
+                .width(Length::Fixed(W_ETA)),
+                text("Estimated time remaining"),
+                tooltip::Position::Bottom,
+            )
+            .gap(6)
+            .style(container::rounded_box),
+        )
+        .width(Length::Fixed(W_ETA)),
+        container(
+            tooltip(
+                col_header_btn(
+                    "RATIO",
+                    SortColumn::Ratio,
+                    &state.sort_column,
+                    state.sort_dir,
+                    Alignment::End,
+                )
+                .width(Length::Fixed(W_RATIO)),
+                text("Upload/download ratio"),
+                tooltip::Position::Bottom,
+            )
+            .gap(6)
+            .style(container::rounded_box),
+        )
+        .width(Length::Fixed(W_RATIO)),
+        container(
+            tooltip(
+                col_header_btn(
+                    "PROGRESS",
+                    SortColumn::Progress,
+                    &state.sort_column,
+                    state.sort_dir,
+                    Alignment::End,
+                )
+                .width(Length::Fixed(W_PROGRESS)),
+                text("Percent complete"),
+                tooltip::Position::Bottom,
+            )
+            .gap(6)
+            .style(container::rounded_box),
+        )
+        .width(Length::Fixed(W_PROGRESS)),
     ]
-    .padding(4);
+    .spacing(16);
+
+    let header = container(header_row).padding(iced::Padding {
+        top: 0.0,
+        bottom: 0.0,
+        left: 0.0,
+        right: SCROLLBAR_WIDTH + 2.0,
+    });
 
     // ── Data rows ─────────────────────────────────────────────────────────────
-    let rows = state.torrents.iter().map(|t| {
+    let display: Vec<&TorrentData> = match state.sort_column {
+        Some(col) => sort_torrents(&state.torrents, col, state.sort_dir),
+        None => state.torrents.iter().collect(),
+    };
+
+    let rows = display.into_iter().map(|t| {
+        let ratio_str = if t.upload_ratio < 0.0 {
+            "—".to_owned()
+        } else {
+            format!("{:.2}", t.upload_ratio)
+        };
+
         let row_content = row![
             text(&t.name)
-                .width(Length::FillPortion(COL_NAME))
+                .width(Length::Fill)
+                .align_x(Alignment::Start)
                 .wrapping(text::Wrapping::WordOrGlyph),
-            text(status_label(t.status)).width(Length::FillPortion(COL_STATUS)),
-            progress_bar(0.0..=1.0, t.percent_done as f32)
-                .length(Length::FillPortion(COL_PROGRESS))
-                .girth(14.0),
+            text(status_label(t.status))
+                .width(Length::Fixed(W_STATUS))
+                .align_x(Alignment::Start),
+            text(format_size(t.total_size))
+                .width(Length::Fixed(W_SIZE))
+                .align_x(Alignment::End),
+            text(format_speed(t.rate_download))
+                .width(Length::Fixed(W_SPEED_DOWN))
+                .align_x(Alignment::End),
+            text(format_speed(t.rate_upload))
+                .width(Length::Fixed(W_SPEED_UP))
+                .align_x(Alignment::End),
+            text(format_eta(t.eta))
+                .width(Length::Fixed(W_ETA))
+                .align_x(Alignment::End),
+            text(ratio_str)
+                .width(Length::Fixed(W_RATIO))
+                .align_x(Alignment::End),
+            container(
+                row![
+                    progress_bar(0.0..=1.0, t.percent_done as f32)
+                        .style(progress_bar_style(t.status))
+                        .length(Length::Fill)
+                        .girth(10.0),
+                    text(format!("{:.0}%", t.percent_done * 100.0))
+                        .size(11)
+                        .width(Length::Fixed(34.0))
+                        .align_x(Alignment::End),
+                ]
+                .spacing(4)
+                .align_y(iced::Center),
+            )
+            .width(Length::Fixed(W_PROGRESS))
+            .align_x(Alignment::Start),
         ]
-        .padding(4)
+        .spacing(16)
+        .width(Length::Fill)
+        .padding([8, 0])
         .align_y(iced::Center);
 
-        button(row_content)
+        let is_selected = state.selected_id == Some(t.id);
+        let row_elem: Element<Message> = if is_selected {
+            container(row_content)
+                .style(crate::theme::selected_row)
+                .width(Length::Fill)
+                .into()
+        } else {
+            row_content.into()
+        };
+
+        button(row_elem)
             .on_press(Message::TorrentSelected(t.id))
-            .style(if state.selected_id == Some(t.id) {
-                iced::widget::button::primary
-            } else {
-                iced::widget::button::text
-            })
+            .style(iced::widget::button::text)
             .width(Length::Fill)
+            .padding(0)
             .into()
     });
 
-    let list = scrollable(column(rows).spacing(2));
+    let list = scrollable(container(column(rows).spacing(2)).padding(iced::Padding {
+        top: 0.0,
+        bottom: 0.0,
+        left: 0.0,
+        right: SCROLLBAR_WIDTH + 2.0,
+    }))
+    .direction(iced::widget::scrollable::Direction::Vertical(
+        iced::widget::scrollable::Scrollbar::new()
+            .width(SCROLLBAR_WIDTH)
+            .scroller_width(SCROLLBAR_WIDTH)
+            .margin(0),
+    ));
 
     let main_content: Element<Message> = container(
-        column![toolbar, error_row, header, list]
+        column![toolbar, error_row, header, rule::horizontal(1), list]
             .spacing(4)
-            .padding(8)
+            .padding([8, 16])
             .width(Length::Fill)
             .height(Length::Fill),
     )
@@ -625,6 +1010,103 @@ pub fn view(state: &TorrentListScreen) -> Element<'_, Message> {
     match &state.add_dialog {
         AddDialogState::Hidden => main_content,
         dialog_state => stack![main_content, view_add_dialog(dialog_state)].into(),
+    }
+}
+
+/// Column-header button: label aligns based on parameter, sort chevron sits next to it.
+///
+/// The text is styled muted + smaller to differentiate from data rows.
+fn col_header_btn(
+    label: &'static str,
+    col: SortColumn,
+    active: &Option<SortColumn>,
+    dir: SortDir,
+    alignment: Alignment,
+) -> iced::widget::Button<'static, Message> {
+    let chevron = chevron_indicator(col, active, dir);
+    let label_elem = text(label)
+        .size(11)
+        .width(Length::Fill)
+        .align_x(alignment)
+        .style(|t: &iced::Theme| iced::widget::text::Style {
+            color: Some(t.palette().text.scale_alpha(0.55)),
+        });
+    let chevron_elem = text(chevron)
+        .size(14)
+        .width(Length::Fixed(14.0))
+        .align_x(Alignment::Center)
+        .style(|t: &iced::Theme| iced::widget::text::Style {
+            color: Some(t.palette().text.scale_alpha(0.55)),
+        });
+
+    let content: Element<'static, Message> = if alignment == Alignment::End {
+        row![chevron_elem, label_elem]
+            .width(Length::Fill)
+            .align_y(Alignment::Center)
+            .into()
+    } else {
+        row![label_elem, chevron_elem]
+            .width(Length::Fill)
+            .align_y(Alignment::Center)
+            .into()
+    };
+
+    button(content)
+        .on_press(Message::ColumnHeaderClicked(col))
+        .style(iced::widget::button::text)
+        .padding([2, 0])
+}
+
+/// Icon-only column-header button (for download/upload speed).
+fn col_header_icon_btn(
+    glyph: char,
+    col: SortColumn,
+    active: &Option<SortColumn>,
+    dir: SortDir,
+    alignment: Alignment,
+) -> iced::widget::Button<'static, Message> {
+    let chevron = chevron_indicator(col, active, dir);
+    let icon_elem = text(String::from(glyph))
+        .font(crate::theme::MATERIAL_ICONS)
+        .size(14)
+        .width(Length::Fill)
+        .align_x(alignment)
+        .style(|t: &iced::Theme| iced::widget::text::Style {
+            color: Some(t.palette().text.scale_alpha(0.55)),
+        });
+    let chevron_elem = text(chevron)
+        .size(14)
+        .width(Length::Fixed(14.0))
+        .align_x(Alignment::Center)
+        .style(|t: &iced::Theme| iced::widget::text::Style {
+            color: Some(t.palette().text.scale_alpha(0.55)),
+        });
+
+    let content: Element<'static, Message> = if alignment == Alignment::End {
+        row![chevron_elem, icon_elem]
+            .width(Length::Fill)
+            .align_y(Alignment::Center)
+            .into()
+    } else {
+        row![icon_elem, chevron_elem]
+            .width(Length::Fill)
+            .align_y(Alignment::Center)
+            .into()
+    };
+
+    button(content)
+        .on_press(Message::ColumnHeaderClicked(col))
+        .style(iced::widget::button::text)
+        .padding([2, 0])
+}
+
+fn chevron_indicator(col: SortColumn, active: &Option<SortColumn>, dir: SortDir) -> &'static str {
+    match active {
+        Some(c) if *c == col => match dir {
+            SortDir::Asc => "▴",
+            SortDir::Desc => "▾",
+        },
+        _ => "",
     }
 }
 
@@ -1108,5 +1590,200 @@ mod tests {
             }
             other => panic!("expected AddLink dialog still open, got {other:?}"),
         }
+    }
+
+    // ── 10.x  v0.5 sort tests ────────────────────────────────────────────────
+
+    fn make_list() -> Vec<TorrentData> {
+        vec![
+            TorrentData {
+                id: 1,
+                name: "charlie".into(),
+                status: 6,
+                total_size: 300,
+                rate_download: 30,
+                rate_upload: 3,
+                eta: 30,
+                upload_ratio: 0.3,
+                percent_done: 0.3,
+                ..Default::default()
+            },
+            TorrentData {
+                id: 2,
+                name: "alpha".into(),
+                status: 0,
+                total_size: 100,
+                rate_download: 10,
+                rate_upload: 1,
+                eta: 10,
+                upload_ratio: 0.1,
+                percent_done: 0.1,
+                ..Default::default()
+            },
+            TorrentData {
+                id: 3,
+                name: "bravo".into(),
+                status: 4,
+                total_size: 200,
+                rate_download: 20,
+                rate_upload: 2,
+                eta: 20,
+                upload_ratio: 0.2,
+                percent_done: 0.2,
+                ..Default::default()
+            },
+        ]
+    }
+
+    /// 10.1 – Empty list returns empty vec for any sort.
+    #[test]
+    fn sort_empty_list() {
+        let torrents: Vec<TorrentData> = vec![];
+        assert!(sort_torrents(&torrents, SortColumn::Name, SortDir::Asc).is_empty());
+    }
+
+    /// 10.2 – Single-element list is a no-op.
+    #[test]
+    fn sort_single_element() {
+        let torrents = vec![make_torrent(1, "only")];
+        let result = sort_torrents(&torrents, SortColumn::Name, SortDir::Asc);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, 1);
+    }
+
+    /// 10.3 – Ascending sort by Name.
+    #[test]
+    fn sort_by_name_asc() {
+        let list = make_list();
+        let result = sort_torrents(&list, SortColumn::Name, SortDir::Asc);
+        let names: Vec<&str> = result.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["alpha", "bravo", "charlie"]);
+    }
+
+    /// 10.4 – Descending sort by Name.
+    #[test]
+    fn sort_by_name_desc() {
+        let list = make_list();
+        let result = sort_torrents(&list, SortColumn::Name, SortDir::Desc);
+        let names: Vec<&str> = result.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["charlie", "bravo", "alpha"]);
+    }
+
+    /// 10.5 – Ascending sort by Status.
+    #[test]
+    fn sort_by_status_asc() {
+        let list = make_list();
+        let result = sort_torrents(&list, SortColumn::Status, SortDir::Asc);
+        let ids: Vec<i64> = result.iter().map(|t| t.id).collect();
+        // status: 0, 4, 6 → ids 2, 3, 1
+        assert_eq!(ids, [2, 3, 1]);
+    }
+
+    /// 10.6 – Ascending sort by Size.
+    #[test]
+    fn sort_by_size_asc() {
+        let list = make_list();
+        let result = sort_torrents(&list, SortColumn::Size, SortDir::Asc);
+        let ids: Vec<i64> = result.iter().map(|t| t.id).collect();
+        assert_eq!(ids, [2, 3, 1]);
+    }
+
+    /// 10.7 – Ascending sort by SpeedDown.
+    #[test]
+    fn sort_by_speed_down_asc() {
+        let list = make_list();
+        let result = sort_torrents(&list, SortColumn::SpeedDown, SortDir::Asc);
+        let ids: Vec<i64> = result.iter().map(|t| t.id).collect();
+        assert_eq!(ids, [2, 3, 1]);
+    }
+
+    /// 10.8 – Ascending sort by SpeedUp.
+    #[test]
+    fn sort_by_speed_up_asc() {
+        let list = make_list();
+        let result = sort_torrents(&list, SortColumn::SpeedUp, SortDir::Asc);
+        let ids: Vec<i64> = result.iter().map(|t| t.id).collect();
+        assert_eq!(ids, [2, 3, 1]);
+    }
+
+    /// 10.9 – Ascending sort by ETA.
+    #[test]
+    fn sort_by_eta_asc() {
+        let list = make_list();
+        let result = sort_torrents(&list, SortColumn::Eta, SortDir::Asc);
+        let ids: Vec<i64> = result.iter().map(|t| t.id).collect();
+        assert_eq!(ids, [2, 3, 1]);
+    }
+
+    /// 10.10 – Unknown ETA (-1) sorts to end.
+    #[test]
+    fn sort_by_eta_unknown_last() {
+        let mut list = make_list();
+        list[0].eta = -1; // id=1 has unknown ETA
+        let result = sort_torrents(&list, SortColumn::Eta, SortDir::Asc);
+        assert_eq!(result.last().unwrap().id, 1);
+    }
+
+    /// 10.11 – Ascending sort by Ratio.
+    #[test]
+    fn sort_by_ratio_asc() {
+        let list = make_list();
+        let result = sort_torrents(&list, SortColumn::Ratio, SortDir::Asc);
+        let ids: Vec<i64> = result.iter().map(|t| t.id).collect();
+        assert_eq!(ids, [2, 3, 1]);
+    }
+
+    /// 10.12 – Ascending sort by Progress.
+    #[test]
+    fn sort_by_progress_asc() {
+        let list = make_list();
+        let result = sort_torrents(&list, SortColumn::Progress, SortDir::Asc);
+        let ids: Vec<i64> = result.iter().map(|t| t.id).collect();
+        assert_eq!(ids, [2, 3, 1]);
+    }
+
+    /// 10.13 – Descending sort reverses any column (spot-check with Size).
+    #[test]
+    fn sort_by_size_desc() {
+        let list = make_list();
+        let result = sort_torrents(&list, SortColumn::Size, SortDir::Desc);
+        let ids: Vec<i64> = result.iter().map(|t| t.id).collect();
+        assert_eq!(ids, [1, 3, 2]);
+    }
+
+    /// 11.1 – ColumnHeaderClicked cycles Unsorted → Asc → Desc → Unsorted.
+    #[test]
+    fn column_header_clicked_cycles_sort() {
+        let mut screen = make_screen();
+        assert_eq!(screen.sort_column, None);
+
+        // First click: Asc
+        let _ = update(&mut screen, Message::ColumnHeaderClicked(SortColumn::Name));
+        assert_eq!(screen.sort_column, Some(SortColumn::Name));
+        assert_eq!(screen.sort_dir, SortDir::Asc);
+
+        // Second click: Desc
+        let _ = update(&mut screen, Message::ColumnHeaderClicked(SortColumn::Name));
+        assert_eq!(screen.sort_column, Some(SortColumn::Name));
+        assert_eq!(screen.sort_dir, SortDir::Desc);
+
+        // Third click: clear
+        let _ = update(&mut screen, Message::ColumnHeaderClicked(SortColumn::Name));
+        assert_eq!(screen.sort_column, None);
+    }
+
+    /// 11.2 – Clicking a different column starts Asc on the new column.
+    #[test]
+    fn column_header_clicked_different_column_resets() {
+        let mut screen = make_screen();
+
+        let _ = update(&mut screen, Message::ColumnHeaderClicked(SortColumn::Name));
+        assert_eq!(screen.sort_column, Some(SortColumn::Name));
+        assert_eq!(screen.sort_dir, SortDir::Asc);
+
+        // Click a different column
+        let _ = update(&mut screen, Message::ColumnHeaderClicked(SortColumn::Size));
+        assert_eq!(screen.sort_column, Some(SortColumn::Size));
+        assert_eq!(screen.sort_dir, SortDir::Asc);
     }
 }

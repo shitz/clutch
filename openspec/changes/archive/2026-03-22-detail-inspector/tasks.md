@@ -47,10 +47,10 @@
 
 ## 7. Formatting Helpers — inspector.rs
 
-- [x] 7.1 Implement private `fn format_size(bytes: i64) -> String` (thresholds: ≥ GiB, ≥ MiB, ≥ KiB, else B; two decimal places)
+- [x] 7.1 Implement private `fn format_size(bytes: i64) -> String` (thresholds: ≥ GB, ≥ MB, ≥ KB, else B; two decimal places)
 - [x] 7.2 Implement private `fn format_speed(bps: i64) -> String` (same thresholds, append "/s")
 - [x] 7.3 Implement private `fn format_eta(secs: i64) -> String` (returns "—" for -1, otherwise "Xs" / "Xm Xs" / "Xh Xm")
-- [x] 7.4 Add unit tests for all three formatters (edge cases: -1 sentinel, 0, exact boundary values, GiB-scale)
+- [x] 7.4 Add unit tests for all three formatters (edge cases: -1 sentinel, 0, exact boundary values, GB-scale)
 
 ## 8. General Tab — inspector.rs view()
 

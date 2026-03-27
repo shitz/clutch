@@ -26,6 +26,7 @@ use std::time::Duration;
 use iced::widget::{column, container};
 use iced::{Element, Length, Subscription, Task};
 
+use crate::app::ThemeMode;
 use crate::rpc::TransmissionCredentials;
 use crate::screens::inspector::{self, InspectorScreen};
 use crate::screens::torrent_list::{self, TorrentListScreen};
@@ -85,6 +86,7 @@ impl MainScreen {
                 task
             }
 
+            // ThemeToggled is intercepted in app::update before reaching here.
             Message::List(msg) => torrent_list::update(&mut self.list, msg).map(Message::List),
 
             Message::Inspector(msg) => {
@@ -97,8 +99,8 @@ impl MainScreen {
     }
 
     /// Compose the list and (when a torrent is selected) the inspector panel.
-    pub fn view(&self) -> Element<'_, Message> {
-        let list_elem = torrent_list::view(&self.list).map(Message::List);
+    pub fn view(&self, theme_mode: ThemeMode) -> Element<'_, Message> {
+        let list_elem = torrent_list::view(&self.list, theme_mode).map(Message::List);
 
         match self.list.selected_torrent() {
             None => list_elem,

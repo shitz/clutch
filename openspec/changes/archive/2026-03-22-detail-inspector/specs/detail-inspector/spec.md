@@ -45,7 +45,7 @@ The detail inspector SHALL display a row of tab buttons at its top: **General**,
 
 ### Requirement: General tab
 
-The General tab SHALL display the following fields for the selected torrent: Name, Total Size, Downloaded, Uploaded, Ratio, ETA, Download Speed, Upload Speed. All sizes SHALL be formatted in human-readable units (B / KiB / MiB / GiB). Speeds SHALL be formatted with per-second units (B/s / KiB/s / MiB/s). ETA SHALL be formatted as a duration string (e.g. "2h 15m"); when ETA is unavailable (sentinel value -1), display "—". Ratio SHALL be formatted to two decimal places; when unavailable (sentinel value -1.0), display "—".
+The General tab SHALL display the following fields for the selected torrent: Name, Total Size, Downloaded, Uploaded, Ratio, ETA, Download Speed, Upload Speed. All sizes SHALL be formatted in human-readable units (B / KB / MB / GB). Speeds SHALL be formatted with per-second units (B/s / KB/s / MB/s). ETA SHALL be formatted as a duration string (e.g. "2h 15m"); when ETA is unavailable (sentinel value -1), display "—". Ratio SHALL be formatted to two decimal places; when unavailable (sentinel value -1.0), display "—".
 
 #### Scenario: General tab displays all fields
 
@@ -65,7 +65,7 @@ The General tab SHALL display the following fields for the selected torrent: Nam
 #### Scenario: Size formatting
 
 - **WHEN** a size value is rendered
-- **THEN** it is expressed in the largest applicable unit (GiB, MiB, KiB, or B) with up to two decimal places
+- **THEN** it is expressed in the largest applicable unit (GB, MB, KB, or B) with up to two decimal places
 
 ### Requirement: Files tab
 
@@ -127,4 +127,4 @@ The Peers tab SHALL display a scrollable list of currently connected peers for t
 #### Scenario: Peer speeds formatted
 
 - **WHEN** a peer row is rendered
-- **THEN** download and upload rates are shown in human-readable speed units (B/s / KiB/s / MiB/s)
+- **THEN** download and upload rates are shown in human-readable speed units (B/s / KB/s / MB/s)

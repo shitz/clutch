@@ -19,7 +19,7 @@
 //! is executed by the tokio runtime on a background thread; the result arrives
 //! back as a new `Message`. Violating this invariant will freeze the UI.
 
-use iced::{Element, Subscription, Task};
+use iced::{Element, Subscription, Task, Theme};
 
 use crate::screens::connection::ConnectionScreen;
 use crate::screens::main_screen::{self, MainScreen};
@@ -66,6 +66,16 @@ pub enum Message {
     Main(main_screen::Message),
 }
 
+// ── Theme mode ────────────────────────────────────────────────────────────────
+
+/// Light or dark Material Design 3 theme selection.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ThemeMode {
+    #[default]
+    Dark,
+    Light,
+}
+
 // ── App state ─────────────────────────────────────────────────────────────────
 
 /// Root application state.
@@ -75,6 +85,8 @@ pub enum Message {
 pub struct AppState {
     /// The currently visible screen.
     pub screen: Screen,
+    /// Active theme (light / dark Material Design 3).
+    pub theme: ThemeMode,
 }
 
 impl AppState {
@@ -82,6 +94,15 @@ impl AppState {
     pub fn new() -> Self {
         AppState {
             screen: Screen::Connection(ConnectionScreen::new()),
+            theme: ThemeMode::default(),
+        }
+    }
+
+    /// Return the active `iced::Theme` for the `.theme()` application callback.
+    pub fn current_theme(&self) -> Theme {
+        match self.theme {
+            ThemeMode::Dark => crate::theme::material_dark_theme(),
+            ThemeMode::Light => crate::theme::material_light_theme(),
         }
     }
 }
@@ -96,11 +117,24 @@ impl AppState {
 /// mutates in-memory state or delegates to a [`Screen`] method that itself
 /// returns immediately. All async work is encapsulated in the returned `Task`.
 pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
-    // Intercept disconnect before taking a mutable borrow on state.screen.
-    if let Message::Main(main_screen::Message::Disconnect) = &message {
-        tracing::info!("Disconnecting from daemon, returning to connection screen");
-        state.screen = Screen::Connection(ConnectionScreen::new());
-        return Task::none();
+    // Intercept global messages before delegating to screens.
+    match &message {
+        Message::Main(main_screen::Message::Disconnect) => {
+            tracing::info!("Disconnecting from daemon, returning to connection screen");
+            state.screen = Screen::Connection(ConnectionScreen::new());
+            return Task::none();
+        }
+        // ThemeToggled bubbles up from TorrentList → MainScreen → here.
+        Message::Main(main_screen::Message::List(
+            crate::screens::torrent_list::Message::ThemeToggled,
+        )) => {
+            state.theme = match state.theme {
+                ThemeMode::Dark => ThemeMode::Light,
+                ThemeMode::Light => ThemeMode::Dark,
+            };
+            return Task::none();
+        }
+        _ => {}
     }
 
     match &mut state.screen {
@@ -122,7 +156,7 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
 pub fn view(state: &AppState) -> Element<'_, Message> {
     match &state.screen {
         Screen::Connection(conn) => conn.view(),
-        Screen::Main(main) => main.view().map(Message::Main),
+        Screen::Main(main) => main.view(state.theme).map(Message::Main),
     }
 }
 
@@ -134,5 +168,42 @@ pub fn subscription(state: &AppState) -> Subscription<Message> {
     match &state.screen {
         Screen::Connection(_) => Subscription::none(),
         Screen::Main(main) => main.subscription().map(Message::Main),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::screens::main_screen;
+    use crate::screens::torrent_list;
+
+    fn app_on_main_screen() -> AppState {
+        let creds = crate::rpc::TransmissionCredentials {
+            host: "localhost".to_owned(),
+            port: 9091,
+            username: None,
+            password: None,
+        };
+        AppState {
+            screen: Screen::Main(main_screen::MainScreen::new(creds, "sid".to_owned())),
+            theme: ThemeMode::Dark,
+        }
+    }
+
+    /// 7.4 – ThemeToggled cycles Dark → Light → Dark.
+    #[test]
+    fn theme_toggled_cycles() {
+        let mut state = app_on_main_screen();
+        assert_eq!(state.theme, ThemeMode::Dark);
+
+        let msg = Message::Main(main_screen::Message::List(
+            torrent_list::Message::ThemeToggled,
+        ));
+
+        let _ = update(&mut state, msg.clone());
+        assert_eq!(state.theme, ThemeMode::Light);
+
+        let _ = update(&mut state, msg);
+        assert_eq!(state.theme, ThemeMode::Dark);
     }
 }
