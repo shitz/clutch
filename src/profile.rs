@@ -159,46 +159,6 @@ impl ProfileStore {
         }
     }
 
-    /// Load the store from disk.
-    ///
-    /// - Returns [`Default::default()`] when the file does not exist.
-    /// - Logs and returns defaults when the file exists but cannot be parsed
-    ///   (does **not** overwrite the corrupt file).
-    pub async fn load() -> Self {
-        let Some(path) = Self::config_path() else {
-            tracing::warn!("Cannot determine config directory; using defaults");
-            return Self::default();
-        };
-        match tokio::fs::read_to_string(&path).await {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                tracing::info!(path = %path.display(), "No config file found; starting with defaults");
-                Self::default()
-            }
-            Err(e) => {
-                tracing::error!(path = %path.display(), error = %e, "Cannot read config file; using defaults");
-                Self::default()
-            }
-            Ok(content) => match toml::from_str::<Self>(&content) {
-                Ok(store) => {
-                    tracing::info!(
-                        path = %path.display(),
-                        profiles = store.profiles.len(),
-                        "Config loaded"
-                    );
-                    store
-                }
-                Err(e) => {
-                    tracing::error!(
-                        path = %path.display(),
-                        error = %e,
-                        "Config parse error; using defaults (original file preserved)"
-                    );
-                    Self::default()
-                }
-            },
-        }
-    }
-
     /// Persist the store to disk atomically (write to `.tmp`, then rename).
     pub async fn save(&self) -> std::io::Result<()> {
         let Some(path) = Self::config_path() else {
@@ -264,11 +224,10 @@ impl ProfileStore {
     pub fn delete_password(id: Uuid) {
         match keyring::Entry::new(KEYRING_SERVICE, &id.to_string()) {
             Ok(entry) => {
-                if let Err(e) = entry.delete_password() {
-                    if !matches!(e, keyring::Error::NoEntry) {
+                if let Err(e) = entry.delete_password()
+                    && !matches!(e, keyring::Error::NoEntry) {
                         tracing::warn!(profile = %id, error = %e, "Failed to delete password from keyring");
                     }
-                }
             }
             Err(e) => {
                 tracing::warn!(profile = %id, error = %e, "Failed to open keyring entry for delete");
@@ -277,8 +236,19 @@ impl ProfileStore {
     }
 
     /// Find a profile by UUID.
+    #[must_use]
     pub fn get(&self, id: Uuid) -> Option<&ConnectionProfile> {
         self.profiles.iter().find(|p| p.id == id)
+    }
+
+    /// Merge `last_connected` from another store, clearing it if the target
+    /// profile no longer exists.
+    pub fn adopt_last_connected(&mut self, from: &ProfileStore) {
+        self.last_connected = from.last_connected;
+        if let Some(id) = self.last_connected
+            && self.get(id).is_none() {
+                self.last_connected = None;
+            }
     }
 }
 

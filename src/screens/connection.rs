@@ -12,7 +12,6 @@ use iced::widget::{Space, button, column, container, row, text, text_input};
 use iced::{Element, Length, Task};
 use uuid::Uuid;
 
-use crate::app::Message;
 use crate::profile::ConnectionProfile;
 use crate::rpc::TransmissionCredentials;
 use crate::theme::{tab_active, tab_inactive, tab_underline};
@@ -38,6 +37,28 @@ pub struct ConnectSuccess {
     pub profile_id: Option<Uuid>,
     pub creds: TransmissionCredentials,
     pub session_id: String,
+}
+
+// ── Message ───────────────────────────────────────────────────────────────────
+
+/// Messages handled by the connection screen.
+#[derive(Debug, Clone)]
+pub enum Message {
+    /// Tab change on the launchpad.
+    TabSelected(ConnectionTab),
+    /// User clicked a saved profile card.
+    ConnectProfile(Uuid),
+    /// Quick-connect form field changes.
+    HostChanged(String),
+    PortChanged(String),
+    UsernameChanged(String),
+    PasswordChanged(String),
+    /// Quick-connect "Connect" button.
+    ConnectClicked,
+    /// Result of a connection probe.
+    ProbeResult(Result<crate::rpc::SessionInfo, String>),
+    /// User clicked "Manage / Add Profile" on the launchpad.
+    ManageProfilesClicked,
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -120,7 +141,7 @@ impl ConnectionScreen {
                 tab_inactive
             })
             .padding([6, 16])
-            .on_press(Message::ConnectionTabSelected(ConnectionTab::SavedProfiles));
+            .on_press(Message::TabSelected(ConnectionTab::SavedProfiles));
 
         let quick_btn = button(text("Quick Connect").size(14))
             .style(if self.tab == ConnectionTab::QuickConnect {
@@ -129,7 +150,7 @@ impl ConnectionScreen {
                 tab_inactive
             })
             .padding([6, 16])
-            .on_press(Message::ConnectionTabSelected(ConnectionTab::QuickConnect));
+            .on_press(Message::TabSelected(ConnectionTab::QuickConnect));
 
         let underline_saved = if self.tab == ConnectionTab::SavedProfiles {
             container(Space::new())
@@ -274,7 +295,7 @@ impl ConnectionScreen {
     pub fn update(&mut self, message: Message) -> (Task<Message>, Option<ConnectSuccess>) {
         match message {
             // ── Tab switching ─────────────────────────────────────────────────
-            Message::ConnectionTabSelected(tab) => {
+            Message::TabSelected(tab) => {
                 self.tab = tab;
                 self.error = None;
                 (Task::none(), None)
@@ -302,7 +323,7 @@ impl ConnectionScreen {
                             .await
                             .map_err(|e| e.to_string())
                     },
-                    Message::SessionProbeResult,
+                    Message::ProbeResult,
                 );
                 (task, None)
             }
@@ -342,13 +363,13 @@ impl ConnectionScreen {
                             .await
                             .map_err(|e| e.to_string())
                     },
-                    Message::SessionProbeResult,
+                    Message::ProbeResult,
                 );
                 (task, None)
             }
 
             // ── Probe results ─────────────────────────────────────────────────
-            Message::SessionProbeResult(Ok(info)) => {
+            Message::ProbeResult(Ok(info)) => {
                 tracing::info!(session_id = %info.session_id, "Connection probe succeeded");
                 let creds = self.connecting_creds.take().unwrap_or_else(|| {
                     self.qc_credentials().unwrap_or(TransmissionCredentials {
@@ -368,7 +389,7 @@ impl ConnectionScreen {
                 (Task::none(), Some(success))
             }
 
-            Message::SessionProbeResult(Err(err)) => {
+            Message::ProbeResult(Err(err)) => {
                 tracing::error!(error = %err, "Connection probe failed");
                 self.is_connecting = false;
                 self.connecting_profile_id = None;
@@ -377,7 +398,10 @@ impl ConnectionScreen {
                 (Task::none(), None)
             }
 
-            _ => (Task::none(), None),
+            Message::ManageProfilesClicked => {
+                // Intercepted by app::update before reaching this screen.
+                (Task::none(), None)
+            }
         }
     }
 }
@@ -430,7 +454,7 @@ mod tests {
     fn probe_failure_resets_state_and_sets_error() {
         let mut s = blank();
         s.is_connecting = true;
-        let (_, next) = s.update(Message::SessionProbeResult(Err(
+        let (_, next) = s.update(Message::ProbeResult(Err(
             "connection refused".to_owned()
         )));
         assert!(!s.is_connecting);
@@ -443,7 +467,7 @@ mod tests {
     fn tab_switch_clears_error() {
         let mut s = blank();
         s.error = Some("old error".to_owned());
-        let _ = s.update(Message::ConnectionTabSelected(ConnectionTab::SavedProfiles));
+        let _ = s.update(Message::TabSelected(ConnectionTab::SavedProfiles));
         assert!(s.error.is_none());
         assert_eq!(s.tab, ConnectionTab::SavedProfiles);
     }

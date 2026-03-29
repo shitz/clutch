@@ -6,6 +6,7 @@
 /// Format a byte count as a human-readable string (e.g. `"1.00 GB"`).
 ///
 /// Returns `"—"` for negative values (sentinel for unavailable).
+#[must_use]
 pub fn format_size(bytes: i64) -> String {
     if bytes < 0 {
         return "—".to_owned();
@@ -28,6 +29,7 @@ pub fn format_size(bytes: i64) -> String {
 /// Format a bytes-per-second rate (e.g. `"1.00 MB/s"`).
 ///
 /// Returns `"—"` for zero or negative values (idle / unavailable).
+#[must_use]
 pub fn format_speed(bps: i64) -> String {
     if bps <= 0 {
         return "—".to_owned();
@@ -47,6 +49,7 @@ pub fn format_speed(bps: i64) -> String {
 /// Format an ETA in seconds to a human-readable duration string.
 ///
 /// Returns `"—"` when `secs` is negative (Transmission sentinel for unknown).
+#[must_use]
 pub fn format_eta(secs: i64) -> String {
     if secs < 0 {
         return "—".to_owned();
@@ -65,6 +68,7 @@ pub fn format_eta(secs: i64) -> String {
 }
 
 /// Format a Unix timestamp as a relative "time ago" string.
+#[must_use]
 pub fn format_ago(unix_secs: i64) -> String {
     if unix_secs <= 0 {
         return "Never".to_owned();

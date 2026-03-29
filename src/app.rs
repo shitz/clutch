@@ -24,7 +24,7 @@ use uuid::Uuid;
 use iced::{Element, Subscription, Task, Theme};
 
 use crate::profile::{ProfileStore, resolve_theme_config};
-use crate::screens::connection::{ConnectionScreen, ConnectionTab};
+use crate::screens::connection::{self, ConnectionScreen};
 use crate::screens::main_screen::{self, MainScreen};
 use crate::screens::settings::{self, SettingsScreen, SettingsTab};
 
@@ -54,27 +54,17 @@ pub enum Message {
     /// Result of the auto-connect probe fired after `ProfilesLoaded`.
     AutoConnectResult(Result<crate::rpc::SessionInfo, String>),
 
-    // -- Connection screen --
-    HostChanged(String),
-    PortChanged(String),
-    UsernameChanged(String),
-    PasswordChanged(String),
-    ConnectClicked,
-    SessionProbeResult(Result<crate::rpc::SessionInfo, String>),
-    /// Tab change on the launchpad.
-    ConnectionTabSelected(ConnectionTab),
-    /// User clicked a saved profile card.
-    ConnectProfile(Uuid),
-    /// User clicked "Manage / Add Profile" on the launchpad.
-    ManageProfilesClicked,
-    /// Fire-and-forget: result of a background save; no state change needed.
-    Noop,
+    // -- Connection screen (delegated) --
+    Connection(connection::Message),
 
     // -- Main screen (delegated) --
     Main(main_screen::Message),
 
     // -- Settings screen (delegated) --
     Settings(settings::Message),
+
+    /// Fire-and-forget: result of a background save; no state change needed.
+    Noop,
 }
 
 // ── Theme mode ────────────────────────────────────────────────────────────────
@@ -141,6 +131,28 @@ impl AppState {
 
 // ── Elm functions ─────────────────────────────────────────────────────────────
 
+/// Stash the current main screen (if any) and switch to Settings.
+fn open_settings(state: &mut AppState, tab: SettingsTab) {
+    if let Screen::Main(_) = &state.screen {
+        if let Screen::Main(m) = std::mem::replace(
+            &mut state.screen,
+            Screen::Settings(SettingsScreen::new(
+                &state.profiles,
+                state.active_profile,
+                tab,
+            )),
+        ) {
+            state.stashed_main = Some(m);
+        }
+    } else {
+        state.screen = Screen::Settings(SettingsScreen::new(
+            &state.profiles,
+            state.active_profile,
+            tab,
+        ));
+    }
+}
+
 pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
     // ── Startup ───────────────────────────────────────────────────────────────
 
@@ -154,20 +166,20 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
         let auto_id = store.last_connected;
         state.profiles = store;
 
-        if let Some(id) = auto_id {
-            if let Some(profile) = state.profiles.get(id) {
-                tracing::info!(profile = %profile.name, "Auto-connecting to last profile");
-                let creds = profile.credentials();
-                let url = creds.rpc_url();
-                return Task::perform(
-                    async move {
-                        crate::rpc::session_get(&url, &creds, "")
-                            .await
-                            .map_err(|e| e.to_string())
-                    },
-                    Message::AutoConnectResult,
-                );
-            }
+        if let Some(id) = auto_id
+            && let Some(profile) = state.profiles.get(id)
+        {
+            tracing::info!(profile = %profile.name, "Auto-connecting to last profile");
+            let creds = profile.credentials();
+            let url = creds.rpc_url();
+            return Task::perform(
+                async move {
+                    crate::rpc::session_get(&url, &creds, "")
+                        .await
+                        .map_err(|e| e.to_string())
+                },
+                Message::AutoConnectResult,
+            );
         }
         // Only rebuild the connection launchpad when we are still sitting on
         // the connection screen. If we are already on Main (e.g. a background
@@ -218,47 +230,11 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
             return Task::none();
         }
         Message::Main(main_screen::Message::OpenSettingsClicked) => {
-            // Stash the current main screen so we can restore it on close.
-            if let Screen::Main(_) = &state.screen {
-                if let Screen::Main(m) = std::mem::replace(
-                    &mut state.screen,
-                    Screen::Settings(SettingsScreen::new(
-                        &state.profiles,
-                        state.active_profile,
-                        SettingsTab::General,
-                    )),
-                ) {
-                    state.stashed_main = Some(m);
-                }
-            } else {
-                state.screen = Screen::Settings(SettingsScreen::new(
-                    &state.profiles,
-                    state.active_profile,
-                    SettingsTab::General,
-                ));
-            }
+            open_settings(state, SettingsTab::General);
             return Task::none();
         }
-        Message::ManageProfilesClicked => {
-            // Stash if coming from Main.
-            if let Screen::Main(_) = &state.screen {
-                if let Screen::Main(m) = std::mem::replace(
-                    &mut state.screen,
-                    Screen::Settings(SettingsScreen::new(
-                        &state.profiles,
-                        state.active_profile,
-                        SettingsTab::Connections,
-                    )),
-                ) {
-                    state.stashed_main = Some(m);
-                }
-            } else {
-                state.screen = Screen::Settings(SettingsScreen::new(
-                    &state.profiles,
-                    state.active_profile,
-                    SettingsTab::Connections,
-                ));
-            }
+        Message::Connection(connection::Message::ManageProfilesClicked) => {
+            open_settings(state, SettingsTab::Connections);
             return Task::none();
         }
         _ => {}
@@ -268,39 +244,46 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
 
     match &mut state.screen {
         Screen::Connection(conn) => {
-            let (task, opt_success) = conn.update(message);
-            if let Some(success) = opt_success {
-                if let Some(id) = success.profile_id {
-                    // Saved profile: persist last_connected.
-                    state.active_profile = Some(id);
-                    state.profiles.last_connected = Some(id);
-                    let profile_name = state.profiles.get(id).map(|p| p.name.clone());
-                    let profiles_snap = state.profiles.clone();
-                    let save_task =
-                        Task::perform(async move { profiles_snap.save().await }, |_| Message::Noop);
-                    state.screen = Screen::Main(MainScreen::new_with_label(
-                        success.creds,
-                        success.session_id,
-                        profile_name,
-                        Some(id),
-                        state.profiles.general.refresh_interval,
-                    ));
-                    tracing::info!(profile_id = %id, "Connected via saved profile");
-                    return save_task.chain(task);
-                } else {
-                    // Ephemeral quick connect: nothing is persisted.
-                    state.active_profile = None;
-                    state.screen = Screen::Main(MainScreen::new_with_label(
-                        success.creds,
-                        success.session_id,
-                        None,
-                        None,
-                        state.profiles.general.refresh_interval,
-                    ));
-                    tracing::info!("Connected via quick connect (ephemeral)");
+            match message {
+                Message::Connection(msg) => {
+                    let (task, opt_success) = conn.update(msg);
+                    if let Some(success) = opt_success {
+                        if let Some(id) = success.profile_id {
+                            // Saved profile: persist last_connected.
+                            state.active_profile = Some(id);
+                            state.profiles.last_connected = Some(id);
+                            let profile_name = state.profiles.get(id).map(|p| p.name.clone());
+                            let profiles_snap = state.profiles.clone();
+                            let save_task =
+                                Task::perform(async move { profiles_snap.save().await }, |_| {
+                                    Message::Noop
+                                });
+                            state.screen = Screen::Main(MainScreen::new_with_label(
+                                success.creds,
+                                success.session_id,
+                                profile_name,
+                                Some(id),
+                                state.profiles.general.refresh_interval,
+                            ));
+                            tracing::info!(profile_id = %id, "Connected via saved profile");
+                            return save_task.chain(task.map(Message::Connection));
+                        } else {
+                            // Ephemeral quick connect: nothing is persisted.
+                            state.active_profile = None;
+                            state.screen = Screen::Main(MainScreen::new_with_label(
+                                success.creds,
+                                success.session_id,
+                                None,
+                                None,
+                                state.profiles.general.refresh_interval,
+                            ));
+                            tracing::info!("Connected via quick connect (ephemeral)");
+                        }
+                    }
+                    task.map(Message::Connection)
                 }
+                _ => Task::none(),
             }
-            task
         }
 
         Screen::Main(main) => match message {
@@ -318,7 +301,7 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 theme_config,
                                 mut store,
                             } => {
-                                store.last_connected = state.profiles.last_connected;
+                                store.adopt_last_connected(&state.profiles);
                                 state.profiles = store;
                                 state.theme = resolve_theme_config(theme_config);
                                 // Propagate new interval to stashed main (if settings were
@@ -335,12 +318,7 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 ));
                             }
                             settings::SettingsResult::StoreUpdated(mut store) => {
-                                store.last_connected = state.profiles.last_connected;
-                                if let Some(lid) = store.last_connected {
-                                    if store.get(lid).is_none() {
-                                        store.last_connected = None;
-                                    }
-                                }
+                                store.adopt_last_connected(&state.profiles);
                                 state.profiles = store;
                                 // Re-save so last_connected is not lost.
                                 let snap = state.profiles.clone();
@@ -372,12 +350,7 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 return task.map(Message::Settings).chain(probe);
                             }
                             settings::SettingsResult::Closed(mut store) => {
-                                store.last_connected = state.profiles.last_connected;
-                                if let Some(lid) = store.last_connected {
-                                    if store.get(lid).is_none() {
-                                        store.last_connected = None;
-                                    }
-                                }
+                                store.adopt_last_connected(&state.profiles);
                                 state.profiles = store;
                                 // Restore the stashed main screen if available —
                                 // this avoids a reconnect/refetch.
@@ -386,18 +359,18 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                     return Task::none();
                                 }
                                 // Fallback: re-open main from active profile.
-                                if let Some(id) = state.active_profile {
-                                    if let Some(profile) = state.profiles.get(id) {
-                                        let creds = profile.credentials();
-                                        state.screen = Screen::Main(MainScreen::new_with_label(
-                                            creds,
-                                            String::new(),
-                                            state.profiles.get(id).map(|p| p.name.clone()),
-                                            Some(id),
-                                            state.profiles.general.refresh_interval,
-                                        ));
-                                        return Task::none();
-                                    }
+                                if let Some(id) = state.active_profile
+                                    && let Some(profile) = state.profiles.get(id)
+                                {
+                                    let creds = profile.credentials();
+                                    state.screen = Screen::Main(MainScreen::new_with_label(
+                                        creds,
+                                        String::new(),
+                                        state.profiles.get(id).map(|p| p.name.clone()),
+                                        Some(id),
+                                        state.profiles.general.refresh_interval,
+                                    ));
+                                    return Task::none();
                                 }
                                 state.active_profile = None;
                                 state.screen = Screen::Connection(ConnectionScreen::new_launchpad(
@@ -417,7 +390,7 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
 /// Render the current screen.
 pub fn view(state: &AppState) -> Element<'_, Message> {
     match &state.screen {
-        Screen::Connection(conn) => conn.view(),
+        Screen::Connection(conn) => conn.view().map(Message::Connection),
         Screen::Main(main) => main.view(state.theme).map(Message::Main),
         Screen::Settings(settings) => settings.view().map(Message::Settings),
     }
@@ -428,35 +401,5 @@ pub fn subscription(state: &AppState) -> Subscription<Message> {
     match &state.screen {
         Screen::Connection(_) | Screen::Settings(_) => Subscription::none(),
         Screen::Main(main) => main.subscription().map(Message::Main),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::screens::main_screen;
-    use crate::screens::torrent_list;
-
-    fn dummy_main_state() -> AppState {
-        let creds = crate::rpc::TransmissionCredentials {
-            host: "localhost".to_owned(),
-            port: 9091,
-            username: None,
-            password: None,
-        };
-        let id = Uuid::new_v4();
-        AppState {
-            screen: Screen::Main(MainScreen::new_with_label(
-                creds,
-                "sid".to_owned(),
-                None,
-                None,
-                1,
-            )),
-            theme: ThemeMode::Dark,
-            profiles: ProfileStore::default(),
-            active_profile: Some(id),
-            stashed_main: None,
-        }
     }
 }

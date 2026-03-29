@@ -168,14 +168,14 @@ fn view_general(torrent: &TorrentData) -> Element<'_, Message> {
     )
 }
 
-fn info_row(label: &'static str, value: String) -> Element<'static, Message> {
+fn info_row<'a>(label: &'a str, value: impl ToString) -> Element<'a, Message> {
     row![
-        text(label)
+        text(label.to_owned())
             .width(120)
             .style(|t: &iced::Theme| iced::widget::text::Style {
                 color: Some(t.palette().text.scale_alpha(0.65)),
             }),
-        text(value),
+        text(value.to_string()),
     ]
     .spacing(16)
     .into()
@@ -347,67 +347,6 @@ fn view_peers(torrent: &TorrentData) -> Element<'_, Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::format::{format_eta, format_size, format_speed};
-
-    // Formatting tests are preserved here to keep screen-level test count.
-    // The canonical implementations and their full test suites live in format.rs.
-
-    #[test]
-    fn format_size_bytes() {
-        assert_eq!(format_size(0), "0 B");
-        assert_eq!(format_size(512), "512 B");
-    }
-
-    #[test]
-    fn format_size_gib() {
-        assert_eq!(format_size(1 << 30), "1.00 GB");
-    }
-
-    #[test]
-    fn format_size_negative_sentinel() {
-        assert_eq!(format_size(-1), "—");
-    }
-
-    #[test]
-    fn format_speed_zero_is_dash() {
-        // Zero speed is displayed as dash (idle / not applicable)
-        assert_eq!(format_speed(0), "—");
-    }
-
-    #[test]
-    fn format_speed_bps() {
-        assert_eq!(format_speed(512), "512 B/s");
-    }
-
-    #[test]
-    fn format_speed_kibps() {
-        assert_eq!(format_speed(1024), "1.00 KB/s");
-    }
-
-    #[test]
-    fn format_speed_mibps() {
-        assert_eq!(format_speed(1 << 20), "1.00 MB/s");
-    }
-
-    #[test]
-    fn format_eta_unknown() {
-        assert_eq!(format_eta(-1), "—");
-    }
-
-    #[test]
-    fn format_eta_seconds() {
-        assert_eq!(format_eta(45), "45s");
-    }
-
-    #[test]
-    fn format_eta_minutes() {
-        assert_eq!(format_eta(90), "1m 30s");
-    }
-
-    #[test]
-    fn format_eta_hours() {
-        assert_eq!(format_eta(3600), "1h 0m");
-    }
 
     /// 12.2 – TabSelected updates active_tab.
     #[test]
