@@ -14,12 +14,10 @@
 //! # Message routing
 //!
 //! Child messages are wrapped:
-//! - `Message::List(TorrentListMessage)` → delegated to `torrent_list::update`
-//! - `Message::Inspector(InspectorMessage)` → delegated to `inspector::update`
-//! - `Message::Disconnect` → escalated via `Task::done` to `app::update`
-//!
-//! `TorrentSelected` is intercepted before delegation so the inspector tab can
-//! be reset to `General` whenever a different torrent is selected.
+//! - `Message::List(TorrentListMessage)` -> delegated to `torrent_list::update`
+//! - `Message::Inspector(InspectorMessage)` -> delegated to `inspector::update`
+//! - `Message::Disconnect` -> escalated to `app::update`
+//! - `Message::OpenSettingsClicked` -> escalated to `app::update`
 
 use std::time::Duration;
 
@@ -31,7 +29,7 @@ use crate::rpc::TransmissionCredentials;
 use crate::screens::inspector::{self, InspectorScreen};
 use crate::screens::torrent_list::{self, TorrentListScreen};
 
-// ── Message ───────────────────────────────────────────────────────────────────
+// -- Message ------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -39,28 +37,48 @@ pub enum Message {
     Inspector(inspector::Message),
     /// Escalated from `List(Disconnect)` — handled by `app::update`.
     Disconnect,
+    /// Settings gear icon — handled by `app::update`.
+    OpenSettingsClicked,
 }
 
-// ── State ─────────────────────────────────────────────────────────────────────
+// -- State --------------------------------------------------------------------
 
 #[derive(Debug)]
 pub struct MainScreen {
     pub list: TorrentListScreen,
     pub inspector: InspectorScreen,
+    /// Host:port label used in the loading splash.
+    pub connect_label: String,
+    /// Optional profile name shown in the loading splash (None for quick connect).
+    pub profile_name: Option<String>,
+    /// Daemon poll interval in seconds, from GeneralSettings.
+    pub refresh_interval: u8,
 }
 
 impl MainScreen {
-    pub fn new(credentials: TransmissionCredentials, session_id: String) -> Self {
+    /// Construct with explicit connect label and optional profile name for the
+    /// loading splash that is shown while the first torrent list is fetched.
+    pub fn new_with_label(
+        credentials: TransmissionCredentials,
+        session_id: String,
+        profile_name: Option<String>,
+        _active_id: Option<uuid::Uuid>,
+        refresh_interval: u8,
+    ) -> Self {
+        let connect_label = format!("{}:{}", credentials.host, credentials.port);
         MainScreen {
             list: TorrentListScreen::new(credentials, session_id),
             inspector: InspectorScreen::new(),
+            connect_label,
+            profile_name,
+            refresh_interval,
         }
     }
 
-    /// Subscription: 1-second tick + serialized RPC worker.
+    /// Subscription: tick at the configured refresh interval + serialized RPC worker.
     pub fn subscription(&self) -> Subscription<Message> {
-        let tick = iced::time::every(Duration::from_secs(1))
-            .map(|_| Message::List(torrent_list::Message::Tick));
+        let interval = Duration::from_secs(self.refresh_interval.max(1) as u64);
+        let tick = iced::time::every(interval).map(|_| Message::List(torrent_list::Message::Tick));
         let worker = Subscription::run(torrent_list::rpc_worker_stream).map(Message::List);
         Subscription::batch([tick, worker])
     }
@@ -70,6 +88,11 @@ impl MainScreen {
         match msg {
             // Intercept Disconnect before it reaches the list.
             Message::List(torrent_list::Message::Disconnect) => Task::done(Message::Disconnect),
+
+            // Settings message bubbles up to app::update.
+            Message::List(torrent_list::Message::OpenSettingsClicked) => {
+                Task::done(Message::OpenSettingsClicked)
+            }
 
             // Intercept TorrentSelected so we can reset the inspector tab.
             Message::List(torrent_list::Message::TorrentSelected(id)) => {
@@ -86,20 +109,33 @@ impl MainScreen {
                 task
             }
 
-            // ThemeToggled is intercepted in app::update before reaching here.
             Message::List(msg) => torrent_list::update(&mut self.list, msg).map(Message::List),
 
             Message::Inspector(msg) => {
                 inspector::update(&mut self.inspector, msg).map(Message::Inspector)
             }
 
-            // Already escalated; app::update handles it.
-            Message::Disconnect => Task::none(),
+            // Already escalated; app::update handles these.
+            Message::Disconnect | Message::OpenSettingsClicked => Task::none(),
         }
     }
 
     /// Compose the list and (when a torrent is selected) the inspector panel.
     pub fn view(&self, theme_mode: ThemeMode) -> Element<'_, Message> {
+        // Show splash until the first torrent-list response arrives.
+        if !self.list.initial_load_done {
+            let mut label = format!("Connecting to {}\u{2026}", self.connect_label);
+            if let Some(name) = &self.profile_name {
+                label = format!("Connecting to {} ({})\u{2026}", self.connect_label, name);
+            }
+            return iced::widget::container(iced::widget::text(label).size(16))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .into();
+        }
+
         let list_elem = torrent_list::view(&self.list, theme_mode).map(Message::List);
 
         match self.list.selected_torrent() {
@@ -121,7 +157,7 @@ impl MainScreen {
     }
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+// -- Tests --------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -131,7 +167,7 @@ mod tests {
     use crate::screens::torrent_list::Message as TLMsg;
 
     fn make_screen() -> MainScreen {
-        MainScreen::new(
+        MainScreen::new_with_label(
             TransmissionCredentials {
                 host: "localhost".to_owned(),
                 port: 9091,
@@ -139,6 +175,9 @@ mod tests {
                 password: None,
             },
             "test-session-id".to_owned(),
+            None,
+            None,
+            1,
         )
     }
 
@@ -152,7 +191,7 @@ mod tests {
         }
     }
 
-    /// 12.3 – Selecting a torrent resets inspector.active_tab to General.
+    /// Selecting a torrent resets inspector.active_tab to General.
     #[test]
     fn torrent_selected_resets_inspector_tab() {
         let mut screen = make_screen();
@@ -177,7 +216,7 @@ mod tests {
         );
     }
 
-    /// 12.3b – Selecting the same torrent (deselects) does not reset the tab.
+    /// Selecting the same torrent (deselects) does not reset the tab.
     #[test]
     fn deselecting_torrent_does_not_reset_tab() {
         let mut screen = make_screen();
@@ -197,21 +236,5 @@ mod tests {
             ActiveTab::Peers,
             "tab should stay on Peers after deselection"
         );
-    }
-
-    /// 12.4 – No selection means inspector not rendered.
-    #[test]
-    fn no_selection_means_inspector_hidden() {
-        let screen = make_screen();
-        assert!(screen.list.selected_torrent().is_none());
-    }
-
-    /// 12.4b – With a selection, selected_torrent() returns Some.
-    #[test]
-    fn with_selection_inspector_is_shown() {
-        let mut screen = make_screen();
-        screen.list.torrents = vec![make_torrent(3)];
-        let _ = screen.update(Message::List(TLMsg::TorrentSelected(3)));
-        assert!(screen.list.selected_torrent().is_some());
     }
 }

@@ -38,11 +38,14 @@ pub const ICON_PLAY: char = '\u{E037}';
 pub const ICON_DELETE: char = '\u{E872}';
 pub const ICON_ADD: char = '\u{E145}';
 pub const ICON_LINK: char = '\u{E157}';
-pub const ICON_DARK_MODE: char = '\u{E51C}';
-pub const ICON_LIGHT_MODE: char = '\u{E518}';
 pub const ICON_LOGOUT: char = '\u{E9BA}';
 pub const ICON_DOWNLOAD: char = '\u{E2C4}';
 pub const ICON_UPLOAD: char = '\u{E2C6}';
+pub const ICON_SETTINGS: char = '\u{E8B8}';
+pub const ICON_TRASH: char = '\u{E872}';
+pub const ICON_CLOSE: char = '\u{E5CD}';
+pub const ICON_SAVE: char = '\u{E161}';
+pub const ICON_UNDO: char = '\u{E166}';
 
 /// Render a single Material icon glyph at 24 px.
 pub fn icon(codepoint: char) -> iced::widget::Text<'static> {

@@ -312,7 +312,7 @@ pub async fn session_get(
         session_id,
         "session-get",
         None,
-        Duration::from_secs(10),
+        Duration::from_secs(5),
     )
     .await
     {
@@ -330,7 +330,7 @@ pub async fn session_get(
                 &new_id,
                 "session-get",
                 None,
-                Duration::from_secs(10),
+                Duration::from_secs(5),
             )
             .await
             {

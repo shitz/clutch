@@ -1,5 +1,6 @@
 mod app;
 mod format;
+mod profile;
 mod rpc;
 mod screens;
 mod theme;

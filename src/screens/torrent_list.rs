@@ -30,8 +30,8 @@ use tokio::sync::mpsc;
 use crate::format::{format_eta, format_size, format_speed};
 use crate::rpc::{AddPayload, RpcWork, TorrentData, TransmissionCredentials};
 use crate::theme::{
-    ICON_ADD, ICON_DARK_MODE, ICON_DELETE, ICON_DOWNLOAD, ICON_LIGHT_MODE, ICON_LINK, ICON_LOGOUT,
-    ICON_PAUSE, ICON_PLAY, ICON_UPLOAD, icon, progress_bar_style,
+    ICON_ADD, ICON_DELETE, ICON_DOWNLOAD, ICON_LINK, ICON_LOGOUT, ICON_PAUSE, ICON_PLAY,
+    ICON_SETTINGS, ICON_UPLOAD, icon, progress_bar_style,
 };
 
 // ── Column layout ─────────────────────────────────────────────────────────────
@@ -201,8 +201,8 @@ pub enum Message {
     AddCompleted(Result<(), String>),
     // Escalated to parent — intercepted by MainScreen before reaching update()
     Disconnect,
-    // Escalated to app — intercepted by app::update via MainScreen
-    ThemeToggled,
+    // Escalated to app — opens Settings screen
+    OpenSettingsClicked,
     // Column sort
     ColumnHeaderClicked(SortColumn),
 }
@@ -216,6 +216,9 @@ pub struct TorrentListScreen {
     pub torrents: Vec<TorrentData>,
     /// Efficiency guard: `true` while an RPC result is pending.
     pub is_loading: bool,
+    /// `true` once the first torrent-list response has been received.
+    /// Used by `MainScreen` to display the connecting splash until then.
+    pub initial_load_done: bool,
     pub sender: Option<mpsc::Sender<RpcWork>>,
     pub error: Option<String>,
     pub selected_id: Option<i64>,
@@ -234,6 +237,7 @@ impl TorrentListScreen {
             credentials,
             torrents: Vec::new(),
             is_loading: false,
+            initial_load_done: false,
             error: None,
             selected_id: None,
             confirming_delete: None,
@@ -325,6 +329,7 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
             tracing::info!(count = torrents.len(), "Torrent list refreshed");
             state.torrents = torrents;
             state.is_loading = false;
+            state.initial_load_done = true;
             state.error = None;
             Task::none()
         }
@@ -332,6 +337,7 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
         Message::TorrentsUpdated(Err(err)) => {
             tracing::error!(error = %err, "torrent-get failed");
             state.is_loading = false;
+            state.initial_load_done = true;
             state.error = Some(err);
             Task::none()
         }
@@ -575,8 +581,8 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
 
         // Disconnect is intercepted by the parent before reaching here.
         Message::Disconnect => Task::none(),
-        // ThemeToggled is intercepted by app::update, never reaches here.
-        Message::ThemeToggled => Task::none(),
+        // OpenSettingsClicked is escalated by MainScreen to app::update.
+        Message::OpenSettingsClicked => Task::none(),
 
         // ── Column sort ───────────────────────────────────────────────────────
         Message::ColumnHeaderClicked(col) => {
@@ -630,16 +636,6 @@ pub fn view(state: &TorrentListScreen, theme_mode: crate::app::ThemeMode) -> Ele
         let can_resume = selected.is_some_and(|t| t.status == 0);
         let can_delete = state.selected_id.is_some();
 
-        let theme_icon = if theme_mode == crate::app::ThemeMode::Dark {
-            ICON_LIGHT_MODE
-        } else {
-            ICON_DARK_MODE
-        };
-        let theme_hint = if theme_mode == crate::app::ThemeMode::Dark {
-            "Switch to light mode"
-        } else {
-            "Switch to dark mode"
-        };
         // Determine which secondary button style to use — dim in dark mode.
         let sec_style: fn(
             &iced::Theme,
@@ -718,11 +714,11 @@ pub fn view(state: &TorrentListScreen, theme_mode: crate::app::ThemeMode) -> Ele
         // ── Group 3: Global / right-aligned ───────────────────────────────────
         let group3: Element<Message> = row![
             tooltip(
-                button(icon(theme_icon))
-                    .on_press(Message::ThemeToggled)
+                button(icon(ICON_SETTINGS))
+                    .on_press(Message::OpenSettingsClicked)
                     .style(sec_style)
                     .padding([4, 6]),
-                text(theme_hint),
+                text("Settings"),
                 tooltip::Position::Bottom,
             )
             .gap(6)
@@ -732,7 +728,7 @@ pub fn view(state: &TorrentListScreen, theme_mode: crate::app::ThemeMode) -> Ele
                     .on_press(Message::Disconnect)
                     .style(sec_style)
                     .padding([4, 6]),
-                text("Disconnect from daemon"),
+                text("Disconnect"),
                 tooltip::Position::Bottom,
             )
             .gap(6)
@@ -741,7 +737,7 @@ pub fn view(state: &TorrentListScreen, theme_mode: crate::app::ThemeMode) -> Ele
         .spacing(4)
         .into();
 
-        row![
+        let toolbar_row: Element<Message> = row![
             group1,
             Space::new().width(16),
             group2,
@@ -750,7 +746,9 @@ pub fn view(state: &TorrentListScreen, theme_mode: crate::app::ThemeMode) -> Ele
         ]
         .align_y(Alignment::Center)
         .spacing(0)
-        .into()
+        .into();
+
+        toolbar_row.into()
     };
 
     // ── Inline error banner ───────────────────────────────────────────────────
