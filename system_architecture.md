@@ -1,307 +1,75 @@
 # Clutch — System Architecture
 
-A cross-platform desktop application built in pure Rust that serves as a remote GUI for a
-Transmission BitTorrent daemon, communicating via the Transmission JSON-RPC API. Built with
-the `iced` 0.14 GUI framework using the Elm architecture.
+Clutch is a cross-platform desktop application built in pure Rust. It serves as a remote GUI for a Transmission BitTorrent daemon, communicating via the Transmission JSON-RPC API.
 
----
+The application is built using the [`iced`](https://github.com/iced-rs/iced) GUI framework and
+strictly follows the **Elm architecture** (`State`, `View`, `Message`, `Update`).
 
-## 1. Core Invariants
+## Core Invariants
 
-| Invariant             | Rule                                                                                                                 |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| **Non-blocking UI**   | `update()` returns in microseconds. All I/O lives in `Task::perform()` or the RPC worker subscription.               |
-| **Serialized RPC**    | All daemon calls flow through a single `tokio::sync::mpsc` channel — at most one HTTP request in-flight at any time. |
-| **Screen-safe state** | Torrent data is only accessible when `Screen::Main` is active — illegal UI states are unrepresentable.               |
-| **Cross-platform**    | No GTK, no web views. Pure Rust dependencies only.                                                                   |
+To keep the application fast and predictable, we maintain a few strict rules:
 
----
+- **Non-blocking UI:** The `update()` function must return in microseconds. All I/O, crypto, and
+  network calls are offloaded to asynchronous `Task`s or background subscriptions.
+- **Serialized RPC:** To prevent overwhelming the Transmission daemon, all RPC calls flow through a
+  single `tokio::sync::mpsc` channel. There is at most _one_ HTTP request in-flight at any time.
+- **Screen-safe State:** Torrent data is only accessible when `Screen::Main` is active. Illegal UI
+  states (like viewing torrents while disconnected) are unrepresentable by the type system.
 
-## 2. Module Layout
+## High-Level App Routing
 
-```text
-src/
-├── main.rs                 Entry point: tracing, fonts, window constraints, iced launch.
-├── app.rs                  AppState, Screen router, Message enum, top-level update/view/subscription.
-├── auth.rs                 PendingAction, AuthDialog, handle_message(), view_overlay() — passphrase dialogs.
-├── crypto.rs               Argon2id KDF, ChaCha20-Poly1305 AEAD helpers, passphrase hash/verify.
-├── format.rs               Shared formatting helpers (size, speed, ETA, duration).
-├── profile.rs              ProfileStore, ConnectionProfile, GeneralSettings, ThemeConfig.
-├── theme.rs                Material Design 3 palettes, icon font, shared widget styles.
-├── rpc/
-│   ├── mod.rs              Re-exports.
-│   ├── models.rs           Data types: TorrentData, TransmissionCredentials, ConnectionParams, etc.
-│   ├── error.rs            RpcError enum (implements std::error::Error).
-│   ├── transport.rs        Low-level HTTP: shared reqwest::Client, post_rpc().
-│   ├── api.rs              High-level functions: session_get, torrent_get, torrent_start/stop/remove/add.
-│   └── worker.rs           RpcWork, RpcResult, execute_work() with session-rotation retry.
-└── screens/
-    ├── mod.rs
-    ├── connection.rs        Connection launchpad (saved profiles tab + quick-connect tab).
-    ├── main_screen.rs       Parent component: composes torrent list + inspector.
-    ├── inspector.rs         Tabbed detail panel (General, Files, Trackers, Peers).
-    ├── torrent_list/
-    │   ├── mod.rs           TorrentListScreen state, Message enum, re-exports.
-    │   ├── update.rs        Elm update function.
-    │   ├── view.rs          Toolbar, column headers, torrent rows.
-    │   ├── sort.rs          Pure sort logic (SortColumn, SortDir, sort_torrents).
-    │   ├── add_dialog.rs    Add-torrent modal (AddDialogState, TorrentFileInfo, view).
-    │   └── worker.rs        Serialized RPC worker subscription stream.
-    └── settings/
-        ├── mod.rs           SettingsTab, SettingsResult, Message enum, re-exports.
-        ├── state.rs         SettingsScreen struct, PendingNavigation, helpers.
-        ├── update.rs        Elm update function (with unsaved-change guard).
-        ├── view.rs          All view methods (header, tabs, general, connections, overlay dialogs).
-        └── draft.rs         ProfileDraft — in-memory editable copy of a connection profile.
-```
-
----
-
-## 3. Screen Router
-
-The application runs exactly one screen at a time, modelled as a discriminated enum:
+The application state (`AppState`) acts as a router. It runs exactly one screen at a time, modelled as a discriminated enum:
 
 ```rust
 pub enum Screen {
-    Connection(ConnectionScreen),  // Startup launchpad, after Disconnect
+    Connection(ConnectionScreen),  // Startup launchpad & saved profiles
     Main(MainScreen),              // Active torrent list + inspector
-    Settings(SettingsScreen),      // Full-screen settings editor
+    Settings(SettingsScreen),      // Profile and app configuration
 }
 ```
 
-`AppState` holds the current screen, resolved theme, profile store, active profile UUID, and an
-optional stashed `MainScreen` (preserved while Settings is open so closing Settings can restore
-it without reconnecting).
+**Message Dispatch:** Each screen has its own Message enum. The top-level `app::Message` wraps these
+and routes them to the active screen's `update()` function, handling global intercepts (like opening
+settings or locking the app) at the top level.
 
-### Startup Flow
+## The RPC Layer & Data Flow
 
-1. `ProfilesLoaded` → resolve theme, check `last_connected`.
-2. If a last-connected profile exists → fire `session-get` probe → `AutoConnectResult`.
-3. Success → `Screen::Main`. Failure → `Screen::Connection` with saved profiles.
+Communication with the Transmission daemon is handled in the `src/rpc/` module using a shared
+`reqwest::Client`.
 
-### Message Architecture
+Because Transmission's RPC handler can wedge under concurrent load, Clutch serializes all requests.
 
-Each screen has its own `Message` enum. The top-level `app::Message` wraps them:
+1. The UI dispatches an RpcWork item.
+1. It enters a `tokio::sync::mpsc::channel`.
+1. A background worker loop (`iced::Subscription`) processes the queue one by one.
+1. The worker automatically handles session rotation (HTTP 409) and retries.
+1. Results are emitted back to the UI as `Messages`.
 
-```rust
-pub enum Message {
-    ProfilesLoaded(ProfileStore),
-    AutoConnectResult(Result<SessionInfo, String>),
-    Connection(connection::Message),
-    Main(main_screen::Message),
-    Settings(settings::Message),
-    // Auth dialog messages (handled by auth::handle_message before per-screen dispatch)
-    AuthSetupPassphraseChanged(String),
-    AuthSetupConfirmChanged(String),
-    AuthUnlockPassphraseChanged(String),
-    SubmitSetupPassphrase,
-    SubmitUnlockPassphrase,
-    DismissAuthDialog,
-    SetupPassphraseComplete { passphrase, hash, profile_id, encrypted_password },
-    UnlockPassphraseResult { passphrase, valid },
-    EncryptPasswordReady { profile_id, encrypted_password },
-    Noop,
-}
-```
+## Security & Profile Storage
 
-`app::update()` handles startup messages and global intercepts (Disconnect, OpenSettings,
-ManageProfiles, ConnectProfile passphrase check), then routes auth dialog messages to
-`auth::handle_message()`, then dispatches to the active screen.
+Connection profiles (host, port, username, password) are persisted locally at
+dirs::config_dir()/clutch/config.toml.
 
----
+- Passwords are encrypted directly inside the TOML file.
+- We use Argon2id for Key Derivation and ChaCha20-Poly1305 for AEAD encryption (src/crypto.rs).
+- The unlocked master passphrase is held in a secrecy::SecretString which automatically zeroizes its backing memory when dropped. Crypto operations are spawned on blocking threads to avoid stalling the UI.
 
-## 4. Connection Screen
+## Directory Structure
 
-Two-tab launchpad:
-
-- **Saved Profiles** (default when profiles exist) — scrollable list of selectable profile cards
-  (card surface + 10 px radius). Clicking a card selects it; a separate "Connect" button in the
-  action bar (bottom-right, `m3_primary_button`) initiates the probe. The first profile is
-  pre-selected on open. The decoded logo `Handle` is stored in state to avoid per-frame re-decode.
-- **Quick Connect** (default when empty) — ephemeral host/port/user/pass form with a right-aligned
-  "Connect" action bar. Nothing persisted.
-
-A "Manage Profiles" tonal button (`m3_tonal_button`) in the action bar opens Settings > Connections.
-
-`update()` returns `(Task<Message>, Option<ConnectSuccess>)`. When `ConnectSuccess` is `Some`,
-the caller transitions to `Screen::Main`.
-
----
-
-## 5. Main Screen
-
-Parent Elm component composing two children:
-
-- **TorrentListScreen** — toolbar, 9-column sortable header, scrollable rows, add-torrent modal,
-  serialized RPC worker subscription.
-- **InspectorScreen** — tabbed detail panel (General, Files, Trackers, Peers) shown below the
-  list when a torrent is selected.
-
-Layout: list fills full height when no selection. With a selection, split vertically
-`FillPortion(3)` (list) / `FillPortion(1)` (inspector).
-
-A loading splash is shown until the first `TorrentsUpdated` response arrives.
-
----
-
-## 6. Settings Screen
-
-Full-screen editor with two tabs:
-
-- **General** — Theme (Light/Dark/System segmented control), Refresh interval (1–30 s).
-  Settings groups wrapped in `m3_card` containers. Action bar: right-aligned "Undo" (`m3_tonal_button`)
-  - "Save" (`m3_primary_button`).
-- **Connections** — Master-detail profile list (left sidebar with tonal selection wash; right form).
-  Edit name, host, port, username, password with `m3_text_input` fields. The password field shows
-  a `"••••••••"` placeholder when a password is saved (write-only UX; the plaintext is never shown).
-  "Test Connection" uses the stored encrypted credentials via the app-level passphrase when the
-  draft password field is unchanged. Action bar mirrors General tab.
-- **About** — Version info.
-
-Overlay modal dialogs (delete confirm, unsaved-change guard, passphrase setup, passphrase unlock)
-are displayed as fixed-width cards centered on a dark scrim. Buttons are right-aligned.
-
-`update()` returns `(Task<Message>, Option<SettingsResult>)`. Results signal the parent:
-
-| Result                 | Effect                                                               |
-| ---------------------- | -------------------------------------------------------------------- |
-| `GeneralSettingsSaved` | Update theme + refresh interval.                                     |
-| `ActiveProfileSaved`   | Reconnect with updated credentials.                                  |
-| `StoreUpdated`         | Persist profile changes (non-active profile).                        |
-| `Closed`               | Restore stashed main screen, persist store updates.                  |
-| `SaveWithPassword`     | Pass new password to `app::update` for passphrase-protected encrypt. |
-| `TestConnectionWithId` | Ask `app::update` to run test probe using decrypted stored password. |
-
-An unsaved-change guard modal prevents accidental data loss on tab switch, profile switch, or close.
-
----
-
-## 7. RPC Layer
-
-### Transport
-
-A shared `reqwest::Client` (`LazyLock` static) issues all HTTP requests. Per-request timeouts
-are set via `RequestBuilder::timeout()` (5 s for probes, 10 s for standard calls, 60 s for
-`torrent-add`).
-
-Session rotation (HTTP 409) is surfaced as `RpcError::SessionRotated`. `session_get` retries
-once automatically; all other calls are retried by the worker.
-
-### Serialized Worker
-
-All main-screen RPC calls are serialized through an `iced::Subscription` backed by a
-`tokio::sync::mpsc::channel(32)`:
+A quick map of where to find things:
 
 ```text
-update() ──[try_send(RpcWork)]──▶ mpsc channel ──▶ worker loop ──▶ execute_work()
-                                                          │
-                                                  emit Message back to update()
+src/
+├── main.rs          # Entry point, window constraints, tracing setup
+├── app.rs           # AppState, Screen router, top-level update/view
+├── rpc/             # Transmission API, types, and the serialized worker
+├── screens/         # Individual screen states and views
+│   ├── connection/  # Profile selection and quick-connect
+│   ├── main_screen/ # The core app: torrent list and detail inspector
+│   └── settings/    # Profile editing and app preferences
+├── auth.rs          # Passphrase setup and unlock dialogs
+├── crypto.rs        # Argon2id / ChaCha20 wrappers
+├── profile.rs       # TOML storage and runtime configuration
+├── theme.rs         # Material Design 3 palettes and widget styling
+└── format.rs        # String formatting for ETA, bytes, speeds
 ```
-
-This guarantees at most one in-flight HTTP connection, preventing Transmission's RPC handler
-from wedging on concurrent requests.
-
-### ConnectionParams
-
-All RPC calls use `ConnectionParams` — a bundle of URL, credentials, and session ID — avoiding
-the need to pass three separate values through every call site.
-
----
-
-## 8. Profile Store
-
-Persistent config at `dirs::config_dir()/clutch/config.toml` (TOML). Passwords are encrypted
-inside the config file using Argon2id + ChaCha20-Poly1305; no OS keychain is used.
-
-Key operations:
-
-- `load_sync()` / `load()` — read config from disk (sync for initial theme, async for runtime).
-- `save()` — atomic write (`.tmp` then rename).
-- `adopt_from(from)` — merge `last_connected`, `master_passphrase_hash`, and per-profile
-  `encrypted_password` from another store instance. Called whenever a settings-screen snapshot
-  replaces the app-level store to prevent silent data loss.
-
-## 9. Credential Encryption
-
-All credential crypto lives in `src/crypto.rs`.
-
-| Function                         | Purpose                                                                                                          |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `encrypt_password(pass, plain)`  | Argon2id KDF (random 16B salt) → ChaCha20-Poly1305 encrypt. Returns `"salt$nonce$ct"` (URL-safe base64, no pad). |
-| `decrypt_password(pass, packed)` | Splits packed string, re-derives key, decrypts. Returns `None` on any error.                                     |
-| `hash_passphrase(pass)`          | Argon2id PHC string (m=19456, t=2, p=1). Stored in `ProfileStore::master_passphrase_hash`.                       |
-| `verify_passphrase(pass, hash)`  | Parses PHC string, verifies. Returns `false` on any error.                                                       |
-
-All KDF operations run on `tokio::task::spawn_blocking` to avoid blocking the iced frame loop.
-The passphrase is stored as `AppState.unlocked_passphrase: Option<secrecy::SecretString>`, which
-zeroizes its backing memory on drop.
-
----
-
-## 10. Theme
-
-Material Design 3 dark and light palettes seeded from Clutch brand colors. Theme preference
-(`Light`/`Dark`/`System`) is resolved at startup and on change via `dark_light::detect()`.
-
-All widget styles are centralised in `theme.rs`. Key exports:
-
-| Export                       | Kind            | Purpose                                                                                             |
-| ---------------------------- | --------------- | --------------------------------------------------------------------------------------------------- |
-| `clutch_theme(is_dark)`      | `fn → Theme`    | Custom M3 palette; dark mode uses `MAGNETIC_BLUE_LIGHT` for contrast                                |
-| `icon_button(content)`       | `fn → Button`   | 36×36 fixed, centered icon, transparent bg, circular primary tint on hover                          |
-| `m3_primary_button`          | style fn        | Filled solid primary pill; primary CTA                                                              |
-| `m3_tonal_button`            | style fn        | 15 % primary wash pill; secondary action                                                            |
-| `m3_text_input`              | style fn        | M3 outlined text field; 1 px border, 8 px radius, 2 px primary border on focus                      |
-| `m3_tooltip`                 | style fn        | Dark elevated tooltip surface with shadow                                                           |
-| `m3_card`                    | style fn        | 16 px uniform radius, tonal elevation, drop shadow                                                  |
-| `segmented_control(…)`       | `fn → Element`  | Connected pill-end button group; active = 18 % alpha primary wash + primary text                    |
-| `selected_row`               | style fn        | 18 % primary wash, 6 px radius; row selection highlight                                             |
-| `inspector_surface`          | style fn        | Asymmetric top-rounded elevated panel for inspector                                                 |
-| `progress_bar_style(status)` | `fn → style fn` | Color by torrent status; 100 px radius track + bar                                                  |
-| `m3_tonal_button`            | style fn        | 15 % primary wash pill; secondary action                                                            |
-| `icon(codepoint)`            | `fn → Text`     | 24 px Material Icons glyph                                                                          |
-| **Asset constants**          | `&[u8]`         | `LOGO_BYTES`, `ICON_256_BYTES`, `ICON_512_BYTES` (compile-time embedded)                            |
-| **Color constants**          | `const Color`   | `MAGNETIC_BLUE`, `MAGNETIC_BLUE_LIGHT`, `SURFACE_DARK/LIGHT`, and all surface/state/progress colors |
-
----
-
-## 11. Observability
-
-Structured logging via `tracing`. Run with `RUST_LOG=clutch=debug` for full RPC traces.
-
----
-
-## 12. Crate Stack
-
-| Crate                  | Version | Purpose                                |
-| ---------------------- | ------- | -------------------------------------- |
-| `iced`                 | 0.14    | GUI framework                          |
-| `iced_aw`              | 0.13    | Additional widgets                     |
-| `reqwest`              | 0.12    | HTTP client                            |
-| `tokio`                | 1       | Async runtime                          |
-| `serde` + `serde_json` | 1       | JSON serialization                     |
-| `toml`                 | 0.8     | Config serialization                   |
-| `uuid`                 | 1       | Profile UUIDs                          |
-| `argon2`               | 0.5     | Argon2id KDF + passphrase hashing      |
-| `chacha20poly1305`     | 0.10    | ChaCha20-Poly1305 AEAD encryption      |
-| `rand`                 | 0.8     | Cryptographically secure random bytes  |
-| `secrecy`              | 0.8     | Zeroizing secret memory wrapper        |
-| `dirs`                 | 5       | Config directory path                  |
-| `dark-light`           | 1       | OS theme detection                     |
-| `tracing`              | 0.1     | Structured logging                     |
-| `rfd`                  | 0.15    | Native file picker                     |
-| `base64`               | 0.22    | `.torrent` file encoding               |
-| `lava_torrent`         | 0.11    | `.torrent` file parsing                |
-| `wiremock` _(dev)_     | 0.6     | HTTP mock server for integration tests |
-
----
-
-## 13. Test Coverage
-
-130 tests across three layers:
-
-- **Unit tests** — exercise `update()` logic and formatting helpers in-memory. Cover all screens
-  (connection, torrent list, settings, inspector, main screen) and the format module.
-- **Integration tests** — use `wiremock` for full RPC round-trips including session rotation,
-  auth errors, parse errors, and happy paths for all six RPC methods.
-- **Sort tests** — verify pure sort logic for all column types and edge cases.

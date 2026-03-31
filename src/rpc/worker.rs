@@ -1,5 +1,17 @@
-//! Serialized RPC worker types and execution logic.
-//!
+// Copyright 2026 The clutch authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! All RPC calls from the main screen flow through [`RpcWork`] items processed
 //! by the worker subscription. This guarantees at most one in-flight HTTP
 //! connection to the daemon at any time.

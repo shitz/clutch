@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod connection;
-pub mod inspector;
-pub mod main_screen;
-pub mod settings;
-pub mod torrent_list;
+pub mod app;
+pub mod auth;
+pub mod crypto;
+pub mod format;
+pub mod profile;
+pub mod rpc;
+pub mod screens;
+pub mod theme;
