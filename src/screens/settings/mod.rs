@@ -26,6 +26,7 @@ pub enum SettingsTab {
     #[default]
     General,
     Connections,
+    About,
 }
 
 // ── Message ───────────────────────────────────────────────────────────────────

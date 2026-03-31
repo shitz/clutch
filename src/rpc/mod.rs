@@ -20,7 +20,5 @@ pub mod worker;
 
 // Re-export commonly used types at crate::rpc level.
 pub use api::session_get;
-pub use models::{
-    AddPayload, ConnectionParams, SessionInfo, TorrentData, TransmissionCredentials,
-};
-pub use worker::{execute_work, RpcResult, RpcWork};
+pub use models::{AddPayload, ConnectionParams, SessionInfo, TorrentData, TransmissionCredentials};
+pub use worker::{RpcResult, RpcWork, execute_work};

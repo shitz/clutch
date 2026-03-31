@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use crate::profile::{ConnectionProfile, GeneralSettings, ProfileStore, ThemeConfig};
 
-use super::draft::ProfileDraft;
 use super::SettingsTab;
+use super::draft::ProfileDraft;
 
 /// A navigation action deferred while the unsaved-change guard is shown.
 #[derive(Debug, Clone)]
@@ -60,8 +60,8 @@ impl SettingsScreen {
             refresh_interval_draft: store.general.refresh_interval.to_string(),
             general_validation_error: None,
             profiles: store.profiles.clone(),
-            selected_profile_id: None,
-            draft: None,
+            selected_profile_id: store.profiles.first().map(|p| p.id),
+            draft: store.profiles.first().map(ProfileDraft::from_profile),
             active_profile_id,
             general_saved: false,
             general_dirty: false,

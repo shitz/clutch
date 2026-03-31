@@ -101,9 +101,14 @@ ManageProfiles), then dispatches to the active screen.
 
 Two-tab launchpad:
 
-- **Saved Profiles** (default when profiles exist) — clickable profile cards plus "Manage / Add
-  Profile" link to Settings.
-- **Quick Connect** (default when empty) — ephemeral host/port/user/pass form. Nothing persisted.
+- **Saved Profiles** (default when profiles exist) — scrollable list of selectable profile cards
+  (card surface + 10 px radius). Clicking a card selects it; a separate "Connect" button in the
+  action bar (bottom-right, `m3_primary_button`) initiates the probe. The first profile is
+  pre-selected on open. The decoded logo `Handle` is stored in state to avoid per-frame re-decode.
+- **Quick Connect** (default when empty) — ephemeral host/port/user/pass form with a right-aligned
+  "Connect" action bar. Nothing persisted.
+
+A "Manage Profiles" tonal button (`m3_tonal_button`) in the action bar opens Settings > Connections.
 
 `update()` returns `(Task<Message>, Option<ConnectSuccess>)`. When `ConnectSuccess` is `Some`,
 the caller transitions to `Screen::Main`.
@@ -130,9 +135,17 @@ A loading splash is shown until the first `TorrentsUpdated` response arrives.
 
 Full-screen editor with two tabs:
 
-- **General** — Theme (Light/Dark/System), Refresh interval (1–30 s).
-- **Connections** — Master-detail profile list. Edit name, host, port, username, password.
-  Test Connection button. Password loaded from OS keyring on demand only.
+- **General** — Theme (Light/Dark/System segmented control), Refresh interval (1–30 s).
+  Settings groups wrapped in `m3_card` containers. Action bar: right-aligned "Undo" (`m3_tonal_button`)
+  - "Save" (`m3_primary_button`).
+- **Connections** — Master-detail profile list (left sidebar with tonal selection wash; right form).
+  Edit name, host, port, username, password with `m3_text_input` fields. "Test Connection"
+  (`m3_tonal_button`). Password loaded from OS keyring on demand only. Action bar mirrors General tab.
+- **About** — Version info.
+
+Overlay modal dialogs (delete confirm, unsaved-change guard) are displayed as fixed-width (360 px)
+cards centered on a dark scrim. Buttons are right-aligned: dismissing action (`m3_tonal_button`)
+left, affirmative/destructive action (danger pill) rightmost.
 
 `update()` returns `(Task<Message>, Option<SettingsResult>)`. Results signal the parent:
 
@@ -195,11 +208,28 @@ Key operations:
 
 ## 9. Theme
 
-Material Design 3 dark and light palettes. Theme preference (`Light`/`Dark`/`System`) is resolved
-at startup and on change via `dark_light::detect()`.
+Material Design 3 dark and light palettes seeded from Clutch brand colors. Theme preference
+(`Light`/`Dark`/`System`) is resolved at startup and on change via `dark_light::detect()`.
 
-All widget styles are centralised in `theme.rs`: tab bar styles, progress bar colouring by torrent
-status, inspector surface, selected-row highlight, and Material icon rendering.
+All widget styles are centralised in `theme.rs`. Key exports:
+
+| Export                       | Kind            | Purpose                                                                                             |
+| ---------------------------- | --------------- | --------------------------------------------------------------------------------------------------- |
+| `clutch_theme(is_dark)`      | `fn → Theme`    | Custom M3 palette; dark mode uses `MAGNETIC_BLUE_LIGHT` for contrast                                |
+| `icon_button(content)`       | `fn → Button`   | 36×36 fixed, centered icon, transparent bg, circular primary tint on hover                          |
+| `m3_primary_button`          | style fn        | Filled solid primary pill; primary CTA                                                              |
+| `m3_tonal_button`            | style fn        | 15 % primary wash pill; secondary action                                                            |
+| `m3_text_input`              | style fn        | M3 outlined text field; 1 px border, 8 px radius, 2 px primary border on focus                      |
+| `m3_tooltip`                 | style fn        | Dark elevated tooltip surface with shadow                                                           |
+| `m3_card`                    | style fn        | 16 px uniform radius, tonal elevation, drop shadow                                                  |
+| `segmented_control(…)`       | `fn → Element`  | Connected pill-end button group; active = 18 % alpha primary wash + primary text                    |
+| `selected_row`               | style fn        | 18 % primary wash, 6 px radius; row selection highlight                                             |
+| `inspector_surface`          | style fn        | Asymmetric top-rounded elevated panel for inspector                                                 |
+| `progress_bar_style(status)` | `fn → style fn` | Color by torrent status; 100 px radius track + bar                                                  |
+| `m3_tonal_button`            | style fn        | 15 % primary wash pill; secondary action                                                            |
+| `icon(codepoint)`            | `fn → Text`     | 24 px Material Icons glyph                                                                          |
+| **Asset constants**          | `&[u8]`         | `LOGO_BYTES`, `ICON_256_BYTES`, `ICON_512_BYTES` (compile-time embedded)                            |
+| **Color constants**          | `const Color`   | `MAGNETIC_BLUE`, `MAGNETIC_BLUE_LIGHT`, `SURFACE_DARK/LIGHT`, and all surface/state/progress colors |
 
 ---
 

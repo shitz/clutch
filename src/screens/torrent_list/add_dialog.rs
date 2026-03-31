@@ -63,11 +63,13 @@ pub fn view_add_dialog(state: &AddDialogState) -> Element<'_, Message> {
                 text("Magnet link"),
                 text_input("magnet:?xt=…", magnet)
                     .on_input(Message::AddDialogMagnetChanged)
-                    .padding(6),
+                    .padding([12, 16])
+                    .style(crate::theme::m3_text_input),
                 text("Destination folder (leave empty for default)"),
                 text_input("/path/to/downloads", destination)
                     .on_input(Message::AddDialogDestinationChanged)
-                    .padding(6),
+                    .padding([12, 16])
+                    .style(crate::theme::m3_text_input),
                 text("File list unavailable for magnet links.").style(|t: &iced::Theme| {
                     iced::widget::text::Style {
                         color: Some(t.palette().text.scale_alpha(0.5)),
@@ -104,7 +106,8 @@ pub fn view_add_dialog(state: &AddDialogState) -> Element<'_, Message> {
                 text("Destination folder (leave empty for default)"),
                 text_input("/path/to/downloads", destination)
                     .on_input(Message::AddDialogDestinationChanged)
-                    .padding(6),
+                    .padding([12, 16])
+                    .style(crate::theme::m3_text_input),
                 text("Files"),
                 file_list,
             ]
@@ -125,14 +128,18 @@ pub fn view_add_dialog(state: &AddDialogState) -> Element<'_, Message> {
             text(title_str).size(18),
             input_area,
             row![
-                button("Add")
-                    .on_press(Message::AddConfirmed)
-                    .style(iced::widget::button::primary),
+                iced::widget::Space::new().width(iced::Length::Fill),
                 button("Cancel")
                     .on_press(Message::AddCancelled)
-                    .style(iced::widget::button::secondary),
+                    .padding([10, 24])
+                    .style(crate::theme::m3_tonal_button),
+                button("Add")
+                    .on_press(Message::AddConfirmed)
+                    .padding([10, 24])
+                    .style(crate::theme::m3_primary_button),
             ]
-            .spacing(8),
+            .spacing(8)
+            .width(iced::Length::Fill),
         ]
         .spacing(12)
         .padding(20)

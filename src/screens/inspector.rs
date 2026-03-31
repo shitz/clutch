@@ -13,8 +13,7 @@
 //! - [`update`] — pure state transition
 //! - [`view`] — renders the panel for the given torrent
 
-use iced::widget::{Space, button};
-use iced::widget::{column, container, progress_bar, row, scrollable, text};
+use iced::widget::{Space, column, container, progress_bar, row, scrollable, text};
 use iced::{Element, Length, Task};
 
 use crate::format::{format_ago, format_eta, format_size, format_speed};
@@ -69,48 +68,35 @@ pub fn view<'a>(state: &InspectorScreen, torrent: &'a TorrentData) -> Element<'a
     // primary-color text; inactive tabs use muted text. A 2 px underline bar
     // is stacked beneath the active tab label.
 
-    let tabs: &[(ActiveTab, &str)] = &[
-        (ActiveTab::General, "General"),
-        (ActiveTab::Files, "Files"),
-        (ActiveTab::Trackers, "Trackers"),
-        (ActiveTab::Peers, "Peers"),
-    ];
+    let tab_bar = crate::theme::segmented_control(
+        &[
+            ("General", ActiveTab::General),
+            ("Files", ActiveTab::Files),
+            ("Trackers", ActiveTab::Trackers),
+            ("Peers", ActiveTab::Peers),
+        ],
+        state.active_tab,
+        Message::TabSelected,
+        true,
+        true,
+    );
 
-    let tab_buttons: Vec<Element<'_, Message>> = tabs
-        .iter()
-        .map(|(tab, label)| {
-            let is_active = state.active_tab == *tab;
-            let btn = button(text(*label).size(13).width(Length::Fill))
-                .on_press(Message::TabSelected(*tab))
-                .style(if is_active {
-                    crate::theme::tab_active
-                } else {
-                    crate::theme::tab_inactive
-                })
-                .width(Length::Fill)
-                .padding([6, 16]);
-
-            let col: Element<'_, Message> = if is_active {
-                // Stack the button with a 2 px underline below it.
-                column![
-                    btn,
-                    container(Space::new().width(Length::Fill).height(2.0))
-                        .style(crate::theme::tab_underline)
-                        .width(Length::Fill),
-                ]
-                .width(Length::Fill)
-                .into()
-            } else {
-                column![btn, Space::new().width(Length::Fill).height(2.0),]
-                    .width(Length::Fill)
-                    .into()
-            };
-
-            container(col).width(Length::FillPortion(1)).into()
-        })
-        .collect();
-
-    let tab_bar = row(tab_buttons).spacing(0);
+    // Center the tab bar: equal Space on both sides so it sits in the middle.
+    let tab_row: Element<'_, Message> = container(
+        row![
+            Space::new().width(Length::FillPortion(1)),
+            container(tab_bar).width(Length::FillPortion(2)),
+            Space::new().width(Length::FillPortion(1)),
+        ]
+        .spacing(0),
+    )
+    .padding(iced::Padding {
+        top: 6.0,
+        right: 0.0,
+        bottom: 0.0,
+        left: 0.0,
+    })
+    .into();
 
     let content = match state.active_tab {
         ActiveTab::General => view_general(torrent),
@@ -120,7 +106,7 @@ pub fn view<'a>(state: &InspectorScreen, torrent: &'a TorrentData) -> Element<'a
     };
 
     container(
-        column![tab_bar, content]
+        column![tab_row, content]
             .width(Length::Fill)
             .height(Length::Fill),
     )
@@ -146,20 +132,31 @@ fn view_general(torrent: &TorrentData) -> Element<'_, Message> {
         format!("{:.2}", torrent.upload_ratio)
     };
 
+    let col1 = column![
+        info_row("Total Size", format_size(torrent.total_size)),
+        info_row("Downloaded", format_size(torrent.downloaded_ever)),
+        info_row("Uploaded", format_size(torrent.uploaded_ever)),
+        info_row("Ratio", ratio_str),
+    ]
+    .spacing(4)
+    .width(Length::FillPortion(1));
+
+    let col2 = column![
+        info_row("ETA", format_eta(torrent.eta)),
+        info_row("Download Speed", format_speed(torrent.rate_download)),
+        info_row("Upload Speed", format_speed(torrent.rate_upload)),
+    ]
+    .spacing(4)
+    .width(Length::FillPortion(1));
+
     tab_content_wrap(
         scrollable(
             container(
                 column![
                     info_row("Name", torrent.name.clone()),
-                    info_row("Total Size", format_size(torrent.total_size)),
-                    info_row("Downloaded", format_size(torrent.downloaded_ever)),
-                    info_row("Uploaded", format_size(torrent.uploaded_ever)),
-                    info_row("Ratio", ratio_str),
-                    info_row("ETA", format_eta(torrent.eta)),
-                    info_row("Download Speed", format_speed(torrent.rate_download)),
-                    info_row("Upload Speed", format_speed(torrent.rate_upload)),
+                    row![col1, col2].spacing(16),
                 ]
-                .spacing(4),
+                .spacing(8),
             )
             .padding([8, 16])
             .width(Length::Fill),
@@ -185,7 +182,11 @@ fn info_row<'a>(label: &'a str, value: impl ToString) -> Element<'a, Message> {
 
 fn view_files(torrent: &TorrentData) -> Element<'_, Message> {
     if torrent.files.is_empty() {
-        return tab_content_wrap(text("No file information available.").into());
+        return tab_content_wrap(
+            container(text("No file information available."))
+                .padding([8, 16])
+                .into(),
+        );
     }
 
     let rows: Vec<Element<'_, Message>> = torrent
@@ -228,7 +229,11 @@ fn view_files(torrent: &TorrentData) -> Element<'_, Message> {
 
 fn view_trackers(torrent: &TorrentData) -> Element<'_, Message> {
     if torrent.tracker_stats.is_empty() {
-        return tab_content_wrap(text("No tracker information available.").into());
+        return tab_content_wrap(
+            container(text("No tracker information available."))
+                .padding([8, 16])
+                .into(),
+        );
     }
 
     let rows: Vec<Element<'_, Message>> = torrent

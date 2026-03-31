@@ -122,10 +122,7 @@ impl AppState {
 
     /// Return the active `iced::Theme` for the `.theme()` application callback.
     pub fn current_theme(&self) -> Theme {
-        match self.theme {
-            ThemeMode::Dark => crate::theme::material_dark_theme(),
-            ThemeMode::Light => crate::theme::material_light_theme(),
-        }
+        crate::theme::clutch_theme(self.theme == ThemeMode::Dark)
     }
 }
 
@@ -163,24 +160,8 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
     if let Message::ProfilesLoaded(store) = &message {
         let store = store.clone();
         state.theme = resolve_theme_config(store.general.theme);
-        let auto_id = store.last_connected;
         state.profiles = store;
 
-        if let Some(id) = auto_id
-            && let Some(profile) = state.profiles.get(id)
-        {
-            tracing::info!(profile = %profile.name, "Auto-connecting to last profile");
-            let creds = profile.credentials();
-            let url = creds.rpc_url();
-            return Task::perform(
-                async move {
-                    crate::rpc::session_get(&url, &creds, "")
-                        .await
-                        .map_err(|e| e.to_string())
-                },
-                Message::AutoConnectResult,
-            );
-        }
         // Only rebuild the connection launchpad when we are still sitting on
         // the connection screen. If we are already on Main (e.g. a background
         // save fired ProfilesLoaded after a successful connect) we must not

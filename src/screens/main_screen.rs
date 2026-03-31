@@ -128,12 +128,25 @@ impl MainScreen {
             if let Some(name) = &self.profile_name {
                 label = format!("Connecting to {} ({})\u{2026}", self.connect_label, name);
             }
-            return iced::widget::container(iced::widget::text(label).size(16))
+            return column![
+                container(iced::widget::text(label).size(16))
+                    .width(Length::Fill)
+                    .height(Length::FillPortion(2))
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill),
+                container(
+                    iced::widget::image(iced::widget::image::Handle::from_bytes(
+                        crate::theme::ICON_512_BYTES,
+                    ))
+                    .width(Length::Fixed(72.0))
+                    .content_fit(iced::ContentFit::ScaleDown),
+                )
                 .width(Length::Fill)
-                .height(Length::Fill)
+                .height(Length::FillPortion(1))
                 .center_x(Length::Fill)
-                .center_y(Length::Fill)
-                .into();
+                .center_y(Length::Fill),
+            ]
+            .into();
         }
 
         let list_elem = torrent_list::view(&self.list, theme_mode).map(Message::List);
@@ -149,7 +162,8 @@ impl MainScreen {
                         .width(Length::Fill),
                     container(inspector_elem)
                         .height(Length::FillPortion(1))
-                        .width(Length::Fill),
+                        .width(Length::Fill)
+                        .style(crate::theme::m3_card),
                 ]
                 .into()
             }

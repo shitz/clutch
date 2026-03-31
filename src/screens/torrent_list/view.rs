@@ -52,19 +52,37 @@ pub fn view(state: &TorrentListScreen, theme_mode: crate::app::ThemeMode) -> Ele
             .map(|t| t.name.as_str())
             .unwrap_or("this torrent");
         row![
-            text(format!("Delete \"{}\"?", name)),
+            text(format!("Delete \"{}\"?", name)).align_y(Alignment::Center),
             checkbox(del_local)
                 .label("Delete local data")
                 .on_toggle(Message::DeleteLocalDataToggled),
-            button("Confirm Delete")
-                .on_press(Message::DeleteConfirmed)
-                .style(iced::widget::button::danger),
+            Space::new(),
             button("Cancel")
                 .on_press(Message::DeleteCancelled)
-                .style(iced::widget::button::secondary),
-            Space::new(),
-            button("Disconnect").on_press(Message::Disconnect),
+                .padding([10, 20])
+                .style(crate::theme::m3_tonal_button),
+            button("Confirm Delete")
+                .on_press(Message::DeleteConfirmed)
+                .padding([10, 20])
+                .style(|t: &iced::Theme, s| {
+                    let p = t.extended_palette();
+                    let bg = match s {
+                        iced::widget::button::Status::Hovered
+                        | iced::widget::button::Status::Pressed => p.danger.strong.color,
+                        _ => p.danger.base.color,
+                    };
+                    iced::widget::button::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        text_color: p.danger.base.text,
+                        border: iced::Border {
+                            radius: 100.0.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }
+                }),
         ]
+        .align_y(Alignment::Center)
         .spacing(8)
         .into()
     } else {
@@ -136,7 +154,7 @@ pub fn view(state: &TorrentListScreen, theme_mode: crate::app::ThemeMode) -> Ele
         ]
         .spacing(16)
         .width(Length::Fill)
-        .padding([8, 0])
+        .padding([10, 0])
         .align_y(iced::Center);
 
         let is_selected = state.selected_id == Some(t.id);
@@ -157,18 +175,45 @@ pub fn view(state: &TorrentListScreen, theme_mode: crate::app::ThemeMode) -> Ele
             .into()
     });
 
-    let list = scrollable(container(column(rows).spacing(2)).padding(iced::Padding {
-        top: 0.0,
-        bottom: 0.0,
-        left: 0.0,
-        right: SCROLLBAR_WIDTH + 2.0,
-    }))
-    .direction(iced::widget::scrollable::Direction::Vertical(
-        iced::widget::scrollable::Scrollbar::new()
-            .width(SCROLLBAR_WIDTH)
-            .scroller_width(SCROLLBAR_WIDTH)
-            .margin(0),
-    ));
+    let list: Element<Message> = if state.initial_load_done && state.torrents.is_empty() {
+        // Empty state — centered logo with helper text
+        container(
+            column![
+                iced::widget::image(iced::widget::image::Handle::from_bytes(
+                    crate::theme::LOGO_BYTES,
+                ))
+                .width(Length::Fixed(180.0))
+                .content_fit(iced::ContentFit::ScaleDown)
+                .opacity(0.25),
+                text("No torrents. Add one with +")
+                    .size(14)
+                    .style(|t: &iced::Theme| iced::widget::text::Style {
+                        color: Some(t.palette().text.scale_alpha(0.4)),
+                    }),
+            ]
+            .spacing(16)
+            .align_x(iced::Alignment::Center),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
+    } else {
+        scrollable(container(column(rows).spacing(4)).padding(iced::Padding {
+            top: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+            right: SCROLLBAR_WIDTH + 2.0,
+        }))
+        .direction(iced::widget::scrollable::Direction::Vertical(
+            iced::widget::scrollable::Scrollbar::new()
+                .width(SCROLLBAR_WIDTH)
+                .scroller_width(SCROLLBAR_WIDTH)
+                .margin(0),
+        ))
+        .into()
+    };
 
     let main_content: Element<Message> = container(
         column![toolbar, error_row, header, rule::horizontal(1), list]
@@ -188,7 +233,7 @@ pub fn view(state: &TorrentListScreen, theme_mode: crate::app::ThemeMode) -> Ele
 
 fn view_normal_toolbar(
     state: &TorrentListScreen,
-    theme_mode: crate::app::ThemeMode,
+    _theme_mode: crate::app::ThemeMode,
 ) -> Element<'_, Message> {
     let selected = state
         .selected_id
@@ -197,42 +242,27 @@ fn view_normal_toolbar(
     let can_resume = selected.is_some_and(|t| t.status == 0);
     let can_delete = state.selected_id.is_some();
 
-    let sec_style: fn(
-        &iced::Theme,
-        iced::widget::button::Status,
-    ) -> iced::widget::button::Style = if theme_mode == crate::app::ThemeMode::Dark {
-        crate::theme::dim_secondary
-    } else {
-        iced::widget::button::secondary
-    };
-
     let group1: Element<Message> = row![
         tooltip(
-            button(icon(ICON_ADD))
-                .on_press(Message::AddTorrentClicked)
-                .style(iced::widget::button::primary)
-                .padding([4, 6]),
+            crate::theme::icon_button(icon(ICON_ADD)).on_press(Message::AddTorrentClicked),
             text("Add torrent from file"),
             tooltip::Position::Bottom,
         )
         .gap(6)
-        .style(container::rounded_box),
+        .style(crate::theme::m3_tooltip),
         tooltip(
-            button(icon(ICON_LINK))
-                .on_press(Message::AddLinkClicked)
-                .style(sec_style)
-                .padding([4, 6]),
+            crate::theme::icon_button(icon(ICON_LINK)).on_press(Message::AddLinkClicked),
             text("Add torrent from magnet link"),
             tooltip::Position::Bottom,
         )
         .gap(6)
-        .style(container::rounded_box),
+        .style(crate::theme::m3_tooltip),
     ]
     .spacing(4)
     .into();
 
     let pause_btn = {
-        let b = button(icon(ICON_PAUSE)).style(sec_style).padding([4, 6]);
+        let b = crate::theme::icon_button(icon(ICON_PAUSE));
         if can_pause {
             b.on_press(Message::PauseClicked)
         } else {
@@ -240,7 +270,7 @@ fn view_normal_toolbar(
         }
     };
     let resume_btn = {
-        let b = button(icon(ICON_PLAY)).style(sec_style).padding([4, 6]);
+        let b = crate::theme::icon_button(icon(ICON_PLAY));
         if can_resume {
             b.on_press(Message::ResumeClicked)
         } else {
@@ -248,7 +278,7 @@ fn view_normal_toolbar(
         }
     };
     let delete_btn = {
-        let b = button(icon(ICON_DELETE)).style(sec_style).padding([4, 6]);
+        let b = crate::theme::icon_button(icon(ICON_DELETE));
         if can_delete {
             b.on_press(Message::DeleteClicked)
         } else {
@@ -258,38 +288,32 @@ fn view_normal_toolbar(
     let group2: Element<Message> = row![
         tooltip(pause_btn, text("Pause"), tooltip::Position::Bottom)
             .gap(6)
-            .style(container::rounded_box),
+            .style(crate::theme::m3_tooltip),
         tooltip(resume_btn, text("Resume"), tooltip::Position::Bottom)
             .gap(6)
-            .style(container::rounded_box),
+            .style(crate::theme::m3_tooltip),
         tooltip(delete_btn, text("Delete"), tooltip::Position::Bottom)
             .gap(6)
-            .style(container::rounded_box),
+            .style(crate::theme::m3_tooltip),
     ]
     .spacing(4)
     .into();
 
     let group3: Element<Message> = row![
         tooltip(
-            button(icon(ICON_SETTINGS))
-                .on_press(Message::OpenSettingsClicked)
-                .style(sec_style)
-                .padding([4, 6]),
+            crate::theme::icon_button(icon(ICON_SETTINGS)).on_press(Message::OpenSettingsClicked),
             text("Settings"),
             tooltip::Position::Bottom,
         )
         .gap(6)
-        .style(container::rounded_box),
+        .style(crate::theme::m3_tooltip),
         tooltip(
-            button(icon(ICON_LOGOUT))
-                .on_press(Message::Disconnect)
-                .style(sec_style)
-                .padding([4, 6]),
+            crate::theme::icon_button(icon(ICON_LOGOUT)).on_press(Message::Disconnect),
             text("Disconnect"),
             tooltip::Position::Bottom,
         )
         .gap(6)
-        .style(container::rounded_box),
+        .style(crate::theme::m3_tooltip),
     ]
     .spacing(4)
     .into();
@@ -310,68 +334,140 @@ fn view_column_header(state: &TorrentListScreen) -> Element<'_, Message> {
     let header_row = row![
         container(
             tooltip(
-                col_header_btn("NAME", SortColumn::Name, &state.sort_column, state.sort_dir, Alignment::Start)
-                    .width(Length::Fill),
+                col_header_btn(
+                    "NAME",
+                    SortColumn::Name,
+                    &state.sort_column,
+                    state.sort_dir,
+                    Alignment::Start
+                )
+                .width(Length::Fill),
                 text("Sort by name"),
                 tooltip::Position::Bottom,
-            ).gap(6).style(container::rounded_box),
-        ).width(Length::Fill),
+            )
+            .gap(6)
+            .style(crate::theme::m3_tooltip),
+        )
+        .width(Length::Fill),
         container(
             tooltip(
-                col_header_btn("STATUS", SortColumn::Status, &state.sort_column, state.sort_dir, Alignment::Start)
-                    .width(Length::Fixed(W_STATUS)),
+                col_header_btn(
+                    "STATUS",
+                    SortColumn::Status,
+                    &state.sort_column,
+                    state.sort_dir,
+                    Alignment::Start
+                )
+                .width(Length::Fixed(W_STATUS)),
                 text("Sort by status"),
                 tooltip::Position::Bottom,
-            ).gap(6).style(container::rounded_box),
-        ).width(Length::Fixed(W_STATUS)),
+            )
+            .gap(6)
+            .style(crate::theme::m3_tooltip),
+        )
+        .width(Length::Fixed(W_STATUS)),
         container(
             tooltip(
-                col_header_btn("SIZE", SortColumn::Size, &state.sort_column, state.sort_dir, Alignment::End)
-                    .width(Length::Fixed(W_SIZE)),
+                col_header_btn(
+                    "SIZE",
+                    SortColumn::Size,
+                    &state.sort_column,
+                    state.sort_dir,
+                    Alignment::End
+                )
+                .width(Length::Fixed(W_SIZE)),
                 text("Total size"),
                 tooltip::Position::Bottom,
-            ).gap(6).style(container::rounded_box),
-        ).width(Length::Fixed(W_SIZE)),
+            )
+            .gap(6)
+            .style(crate::theme::m3_tooltip),
+        )
+        .width(Length::Fixed(W_SIZE)),
         container(
             tooltip(
-                col_header_icon_btn(ICON_DOWNLOAD, SortColumn::SpeedDown, &state.sort_column, state.sort_dir, Alignment::End)
-                    .width(Length::Fixed(W_SPEED_DOWN)),
+                col_header_icon_btn(
+                    ICON_DOWNLOAD,
+                    SortColumn::SpeedDown,
+                    &state.sort_column,
+                    state.sort_dir,
+                    Alignment::End
+                )
+                .width(Length::Fixed(W_SPEED_DOWN)),
                 text("Download speed"),
                 tooltip::Position::Bottom,
-            ).gap(6).style(container::rounded_box),
-        ).width(Length::Fixed(W_SPEED_DOWN)),
+            )
+            .gap(6)
+            .style(crate::theme::m3_tooltip),
+        )
+        .width(Length::Fixed(W_SPEED_DOWN)),
         container(
             tooltip(
-                col_header_icon_btn(ICON_UPLOAD, SortColumn::SpeedUp, &state.sort_column, state.sort_dir, Alignment::End)
-                    .width(Length::Fixed(W_SPEED_UP)),
+                col_header_icon_btn(
+                    ICON_UPLOAD,
+                    SortColumn::SpeedUp,
+                    &state.sort_column,
+                    state.sort_dir,
+                    Alignment::End
+                )
+                .width(Length::Fixed(W_SPEED_UP)),
                 text("Upload speed"),
                 tooltip::Position::Bottom,
-            ).gap(6).style(container::rounded_box),
-        ).width(Length::Fixed(W_SPEED_UP)),
+            )
+            .gap(6)
+            .style(crate::theme::m3_tooltip),
+        )
+        .width(Length::Fixed(W_SPEED_UP)),
         container(
             tooltip(
-                col_header_btn("ETA", SortColumn::Eta, &state.sort_column, state.sort_dir, Alignment::End)
-                    .width(Length::Fixed(W_ETA)),
+                col_header_btn(
+                    "ETA",
+                    SortColumn::Eta,
+                    &state.sort_column,
+                    state.sort_dir,
+                    Alignment::End
+                )
+                .width(Length::Fixed(W_ETA)),
                 text("Estimated time remaining"),
                 tooltip::Position::Bottom,
-            ).gap(6).style(container::rounded_box),
-        ).width(Length::Fixed(W_ETA)),
+            )
+            .gap(6)
+            .style(crate::theme::m3_tooltip),
+        )
+        .width(Length::Fixed(W_ETA)),
         container(
             tooltip(
-                col_header_btn("RATIO", SortColumn::Ratio, &state.sort_column, state.sort_dir, Alignment::End)
-                    .width(Length::Fixed(W_RATIO)),
+                col_header_btn(
+                    "RATIO",
+                    SortColumn::Ratio,
+                    &state.sort_column,
+                    state.sort_dir,
+                    Alignment::End
+                )
+                .width(Length::Fixed(W_RATIO)),
                 text("Upload/download ratio"),
                 tooltip::Position::Bottom,
-            ).gap(6).style(container::rounded_box),
-        ).width(Length::Fixed(W_RATIO)),
+            )
+            .gap(6)
+            .style(crate::theme::m3_tooltip),
+        )
+        .width(Length::Fixed(W_RATIO)),
         container(
             tooltip(
-                col_header_btn("PROGRESS", SortColumn::Progress, &state.sort_column, state.sort_dir, Alignment::End)
-                    .width(Length::Fixed(W_PROGRESS)),
+                col_header_btn(
+                    "PROGRESS",
+                    SortColumn::Progress,
+                    &state.sort_column,
+                    state.sort_dir,
+                    Alignment::End
+                )
+                .width(Length::Fixed(W_PROGRESS)),
                 text("Percent complete"),
                 tooltip::Position::Bottom,
-            ).gap(6).style(container::rounded_box),
-        ).width(Length::Fixed(W_PROGRESS)),
+            )
+            .gap(6)
+            .style(crate::theme::m3_tooltip),
+        )
+        .width(Length::Fixed(W_PROGRESS)),
     ]
     .spacing(16);
 

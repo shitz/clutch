@@ -7,14 +7,12 @@
 //!   connection form. Credentials are held in memory only — nothing is saved to
 //!   disk or the OS keyring.
 
-use iced::widget::rule;
-use iced::widget::{Space, button, column, container, row, text, text_input};
-use iced::{Element, Length, Task};
+use iced::widget::{Space, button, column, container, row, scrollable, text, text_input};
+use iced::{Alignment, Element, Length, Task};
 use uuid::Uuid;
 
 use crate::profile::ConnectionProfile;
 use crate::rpc::TransmissionCredentials;
-use crate::theme::{tab_active, tab_inactive, tab_underline};
 
 // ── Tab state ─────────────────────────────────────────────────────────────────
 
@@ -47,6 +45,8 @@ pub enum Message {
     /// Tab change on the launchpad.
     TabSelected(ConnectionTab),
     /// User clicked a saved profile card.
+    ProfileSelected(Uuid),
+    /// User clicked Connect in the saved profiles action bar.
     ConnectProfile(Uuid),
     /// Quick-connect form field changes.
     HostChanged(String),
@@ -83,6 +83,11 @@ pub struct ConnectionScreen {
     pub connecting_profile_id: Option<Uuid>,
     /// Credentials for the in-flight probe — used to build `ConnectSuccess`.
     connecting_creds: Option<TransmissionCredentials>,
+    /// UUID of the saved profile highlighted in the list (not yet connecting).
+    pub selected_profile_id: Option<Uuid>,
+
+    /// Pre-decoded logo image handle — created once to avoid per-frame re-decode.
+    pub logo_handle: iced::widget::image::Handle,
 
     /// Error from the most recent failed probe.
     pub error: Option<String>,
@@ -100,6 +105,7 @@ impl ConnectionScreen {
         };
         ConnectionScreen {
             tab,
+            selected_profile_id: profiles.first().map(|p| p.id),
             profiles: profiles.to_vec(),
             qc_host: "localhost".to_owned(),
             qc_port: "9091".to_owned(),
@@ -108,6 +114,7 @@ impl ConnectionScreen {
             is_connecting: false,
             connecting_profile_id: None,
             connecting_creds: None,
+            logo_handle: iced::widget::image::Handle::from_bytes(crate::theme::LOGO_BYTES),
             error: None,
         }
     }
@@ -133,52 +140,17 @@ impl ConnectionScreen {
     // ── View ─────────────────────────────────────────────────────────────────
 
     pub fn view(&self) -> Element<'_, Message> {
-        // Tab bar
-        let saved_btn = button(text("Saved Profiles").size(14))
-            .style(if self.tab == ConnectionTab::SavedProfiles {
-                tab_active
-            } else {
-                tab_inactive
-            })
-            .padding([6, 16])
-            .on_press(Message::TabSelected(ConnectionTab::SavedProfiles));
-
-        let quick_btn = button(text("Quick Connect").size(14))
-            .style(if self.tab == ConnectionTab::QuickConnect {
-                tab_active
-            } else {
-                tab_inactive
-            })
-            .padding([6, 16])
-            .on_press(Message::TabSelected(ConnectionTab::QuickConnect));
-
-        let underline_saved = if self.tab == ConnectionTab::SavedProfiles {
-            container(Space::new())
-                .width(Length::Fill)
-                .height(2)
-                .style(tab_underline)
-        } else {
-            container(Space::new()).width(Length::Fill).height(2)
-        };
-
-        let underline_quick = if self.tab == ConnectionTab::QuickConnect {
-            container(Space::new())
-                .width(Length::Fill)
-                .height(2)
-                .style(tab_underline)
-        } else {
-            container(Space::new()).width(Length::Fill).height(2)
-        };
-
-        let tab_bar = column![
-            row![
-                column![saved_btn, underline_saved].width(Length::Shrink),
-                column![quick_btn, underline_quick].width(Length::Shrink),
-                Space::new().width(Length::Fill),
+        // Tab bar — M3 segmented control
+        let tab_bar = crate::theme::segmented_control(
+            &[
+                ("Saved Profiles", ConnectionTab::SavedProfiles),
+                ("Quick Connect", ConnectionTab::QuickConnect),
             ],
-            rule::horizontal(1),
-        ]
-        .spacing(0);
+            self.tab,
+            Message::TabSelected,
+            true,
+            false,
+        );
 
         let content: Element<'_, Message> = match self.tab {
             ConnectionTab::SavedProfiles => self.view_saved_profiles(),
@@ -195,24 +167,47 @@ impl ConnectionScreen {
             Space::new().into()
         };
 
+        let tab_bar = container(container(tab_bar).width(Length::Fixed(380.0)))
+            .width(Length::Fill)
+            .center_x(Length::Fill);
+
         let panel = column![
-            text("Connect to Transmission").size(22),
+            iced::widget::image(self.logo_handle.clone())
+                .width(Length::Fixed(220.0))
+                .content_fit(iced::ContentFit::ScaleDown),
             tab_bar,
             content,
             error_row,
         ]
         .spacing(16)
+        .align_x(iced::Alignment::Center)
         .max_width(440);
 
-        container(panel)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .into()
+        container(
+            column![
+                Space::new().height(Length::Fixed(120.0)),
+                container(panel).width(Length::Fill).center_x(Length::Fill),
+            ]
+            .height(Length::Fill),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 
     fn view_saved_profiles(&self) -> Element<'_, Message> {
+        let manage_btn = button(
+            row![
+                crate::theme::icon(crate::theme::ICON_SETTINGS),
+                text("Manage Profiles").size(14),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        )
+        .on_press(Message::ManageProfilesClicked)
+        .padding([10, 20])
+        .style(crate::theme::m3_tonal_button);
+
         if self.profiles.is_empty() {
             return column![
                 text("No saved profiles yet.").style(|t: &iced::Theme| {
@@ -220,9 +215,7 @@ impl ConnectionScreen {
                         color: Some(t.palette().text.scale_alpha(0.55)),
                     }
                 }),
-                button(text("\u{2699} Manage / Add Profile\u{2026}"))
-                    .on_press(Message::ManageProfilesClicked)
-                    .style(iced::widget::button::secondary),
+                manage_btn,
             ]
             .spacing(12)
             .into();
@@ -232,40 +225,136 @@ impl ConnectionScreen {
             .profiles
             .iter()
             .map(|p| {
-                let is_this = self.connecting_profile_id == Some(p.id);
-                let label = if is_this {
+                let is_selected = self.selected_profile_id == Some(p.id);
+                let is_connecting_this = self.connecting_profile_id == Some(p.id);
+                let id = p.id;
+                let name = if is_connecting_this {
                     "Connecting\u{2026}".to_owned()
                 } else {
-                    format!("{}  \u{2014}  {}:{}", p.name, p.host, p.port)
+                    p.name.clone()
                 };
-                let btn = button(text(label)).width(Length::Fill).padding([10, 16]);
-                if self.is_connecting {
-                    btn.into()
-                } else {
-                    btn.on_press(Message::ConnectProfile(p.id)).into()
-                }
+                let subtitle = format!("{}:{}", p.host, p.port);
+                let card = button(
+                    column![
+                        text(name).size(14),
+                        text(subtitle).size(12).style(|t: &iced::Theme| {
+                            iced::widget::text::Style {
+                                color: Some(t.palette().text.scale_alpha(0.55)),
+                            }
+                        }),
+                    ]
+                    .spacing(3),
+                )
+                .width(Length::Fill)
+                .padding([12, 16])
+                .on_press(Message::ProfileSelected(id))
+                .style(move |t: &iced::Theme, _status| {
+                    let is_dark = t.extended_palette().background.base.color.r < 0.5;
+                    let primary = t.palette().primary;
+                    if is_selected {
+                        button::Style {
+                            background: Some(iced::Background::Color(iced::Color {
+                                a: 0.22,
+                                ..primary
+                            })),
+                            text_color: t.palette().text,
+                            border: iced::Border {
+                                color: primary,
+                                width: 1.0,
+                                radius: 10.0.into(),
+                            },
+                            shadow: iced::Shadow::default(),
+                            snap: false,
+                        }
+                    } else {
+                        let bg = if is_dark {
+                            crate::theme::CARD_SURFACE_DARK
+                        } else {
+                            crate::theme::CARD_SURFACE_LIGHT
+                        };
+                        button::Style {
+                            background: Some(iced::Background::Color(bg)),
+                            text_color: t.palette().text,
+                            border: iced::Border {
+                                color: iced::Color::TRANSPARENT,
+                                width: 1.0,
+                                radius: 10.0.into(),
+                            },
+                            shadow: iced::Shadow::default(),
+                            snap: false,
+                        }
+                    }
+                });
+                card.into()
             })
             .collect();
 
-        let mut col = column(profile_cards).spacing(6);
-        col = col.push(Space::new().height(4));
-        col = col.push(rule::horizontal(1));
-        col = col.push(Space::new().height(4));
-        col = col.push(
-            button(text("\u{2699} Manage / Add Profile\u{2026}"))
-                .on_press(Message::ManageProfilesClicked)
-                .style(iced::widget::button::text),
-        );
-        col.into()
+        let list = container(scrollable(column(profile_cards).spacing(8)).height(Length::Shrink))
+            .max_height(300.0);
+
+        let connect_btn: Element<'_, Message> = if self.is_connecting {
+            button(
+                row![
+                    crate::theme::icon(crate::theme::ICON_PLAY),
+                    text("Connecting\u{2026}").size(14),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            )
+            .padding([10, 20])
+            .style(crate::theme::m3_primary_button)
+            .into()
+        } else {
+            let b = button(
+                row![
+                    crate::theme::icon(crate::theme::ICON_PLAY),
+                    text("Connect").size(14),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            )
+            .padding([10, 20])
+            .style(crate::theme::m3_primary_button);
+            if let Some(profile_id) = self.selected_profile_id {
+                b.on_press(Message::ConnectProfile(profile_id)).into()
+            } else {
+                b.into()
+            }
+        };
+
+        let action_bar = row![manage_btn, Space::new().width(Length::Fill), connect_btn,]
+            .width(Length::Fill)
+            .align_y(iced::Alignment::Center);
+
+        column![list, Space::new().height(Length::Fixed(16.0)), action_bar,].into()
     }
 
     fn view_quick_connect(&self) -> Element<'_, Message> {
         let connecting_quick = self.is_connecting && self.connecting_profile_id.is_none();
 
         let connect_btn: Element<'_, Message> = if connecting_quick {
-            button("Connecting\u{2026}").padding([8, 24]).into()
+            button(
+                row![
+                    crate::theme::icon(crate::theme::ICON_PLAY),
+                    text("Connecting\u{2026}").size(14),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            )
+            .padding([10, 20])
+            .style(crate::theme::m3_primary_button)
+            .into()
         } else {
-            let b = button("Connect").padding([8, 24]);
+            let b = button(
+                row![
+                    crate::theme::icon(crate::theme::ICON_PLAY),
+                    text("Connect").size(14),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            )
+            .padding([10, 20])
+            .style(crate::theme::m3_primary_button);
             if self.is_connecting {
                 b.into()
             } else {
@@ -273,14 +362,29 @@ impl ConnectionScreen {
             }
         };
 
+        let action_bar = row![Space::new().width(Length::Fill), connect_btn,]
+            .width(Length::Fill)
+            .align_y(Alignment::Center);
+
         column![
-            text_input("Host", &self.qc_host).on_input(Message::HostChanged),
-            text_input("Port", &self.qc_port).on_input(Message::PortChanged),
-            text_input("Username (optional)", &self.qc_username).on_input(Message::UsernameChanged),
+            text_input("Host", &self.qc_host)
+                .on_input(Message::HostChanged)
+                .padding([12, 16])
+                .style(crate::theme::m3_text_input),
+            text_input("Port", &self.qc_port)
+                .on_input(Message::PortChanged)
+                .padding([12, 16])
+                .style(crate::theme::m3_text_input),
+            text_input("Username (optional)", &self.qc_username)
+                .on_input(Message::UsernameChanged)
+                .padding([12, 16])
+                .style(crate::theme::m3_text_input),
             text_input("Password (optional)", &self.qc_password)
                 .on_input(Message::PasswordChanged)
+                .padding([12, 16])
+                .style(crate::theme::m3_text_input)
                 .secure(true),
-            connect_btn,
+            action_bar,
         ]
         .spacing(10)
         .into()
@@ -297,6 +401,13 @@ impl ConnectionScreen {
             // ── Tab switching ─────────────────────────────────────────────────
             Message::TabSelected(tab) => {
                 self.tab = tab;
+                self.error = None;
+                (Task::none(), None)
+            }
+
+            // ── Saved profile selection ──────────────────────────────────────
+            Message::ProfileSelected(id) => {
+                self.selected_profile_id = Some(id);
                 self.error = None;
                 (Task::none(), None)
             }
@@ -454,9 +565,7 @@ mod tests {
     fn probe_failure_resets_state_and_sets_error() {
         let mut s = blank();
         s.is_connecting = true;
-        let (_, next) = s.update(Message::ProbeResult(Err(
-            "connection refused".to_owned()
-        )));
+        let (_, next) = s.update(Message::ProbeResult(Err("connection refused".to_owned())));
         assert!(!s.is_connecting);
         assert_eq!(s.error.as_deref(), Some("connection refused"));
         assert!(next.is_none());

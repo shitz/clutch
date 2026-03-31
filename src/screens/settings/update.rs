@@ -75,10 +75,9 @@ impl SettingsScreen {
                 self.refresh_interval_saved = self.refresh_interval_draft.clone();
                 let store = self.build_store_snapshot();
                 let store_clone = store.clone();
-                let task = Task::perform(
-                    async move { store_clone.save().await },
-                    |_| Message::GeneralRevertClicked,
-                );
+                let task = Task::perform(async move { store_clone.save().await }, |_| {
+                    Message::GeneralRevertClicked
+                });
                 (
                     task,
                     Some(SettingsResult::GeneralSettingsSaved {
@@ -144,8 +143,7 @@ impl SettingsScreen {
                 }
                 let store = self.build_store_snapshot();
                 let s = store.clone();
-                let task =
-                    Task::perform(async move { s.save().await }, |_| Message::RevertClicked);
+                let task = Task::perform(async move { s.save().await }, |_| Message::RevertClicked);
                 (task, Some(SettingsResult::StoreUpdated(store)))
             }
 
@@ -190,10 +188,12 @@ impl SettingsScreen {
                 let Some(d) = &mut self.draft else {
                     return (Task::none(), None);
                 };
-                if !d.password_changed && d.password.is_empty()
-                    && let Some(pw) = ProfileStore::get_password(d.id) {
-                        d.password = pw;
-                    }
+                if !d.password_changed
+                    && d.password.is_empty()
+                    && let Some(pw) = ProfileStore::get_password(d.id)
+                {
+                    d.password = pw;
+                }
                 let Some(creds) = d.to_credentials() else {
                     return (Task::none(), None);
                 };
@@ -263,9 +263,10 @@ impl SettingsScreen {
             }
             Message::RevertClicked => {
                 if let Some(id) = self.selected_profile_id
-                    && let Some(p) = self.profiles.iter().find(|p| p.id == id) {
-                        self.draft = Some(ProfileDraft::from_profile(p));
-                    }
+                    && let Some(p) = self.profiles.iter().find(|p| p.id == id)
+                {
+                    self.draft = Some(ProfileDraft::from_profile(p));
+                }
                 self.dirty = false;
                 (Task::none(), None)
             }
@@ -294,9 +295,10 @@ impl SettingsScreen {
                 let pending = self.confirm_discard.take();
                 self.dirty = false;
                 if let Some(id) = self.selected_profile_id
-                    && let Some(p) = self.profiles.iter().find(|p| p.id == id) {
-                        self.draft = Some(ProfileDraft::from_profile(p));
-                    }
+                    && let Some(p) = self.profiles.iter().find(|p| p.id == id)
+                {
+                    self.draft = Some(ProfileDraft::from_profile(p));
+                }
                 if let Some(nav) = pending {
                     match nav {
                         PendingNavigation::Close => {

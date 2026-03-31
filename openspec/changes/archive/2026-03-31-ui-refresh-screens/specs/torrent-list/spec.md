@@ -36,7 +36,7 @@ The torrent list SHALL display a column header row that remains visible while th
 
 ### Requirement: Scrollable torrent rows
 
-The list SHALL display one row per torrent, rendered inside a scrollable region. Each row SHALL include the following columns: Name (text), Status (text), Size (human-readable bytes), Downloaded (human-readable bytes), ↓ Speed (human-readable bytes/s, shown as "—" when zero), ↑ Speed (human-readable bytes/s, shown as "—" when zero), ETA (human-readable duration, shown as "—" when not applicable), Ratio (two decimal places, shown as "—" when no data uploaded), and Progress (color-coded progress bar). All human-readable formatting SHALL use the same helper functions as the detail inspector.
+The list SHALL display one row per torrent, rendered inside a scrollable region. Each row SHALL include all nine data columns. Row vertical padding SHALL be at least 10 px (top + bottom combined). Row spacing in the list SHALL be at least 4 px. All human-readable formatting SHALL use the same helper functions as the detail inspector.
 
 #### Scenario: Each torrent appears as a row
 
@@ -47,6 +47,11 @@ The list SHALL display one row per torrent, rendered inside a scrollable region.
 
 - **WHEN** a torrent row is rendered
 - **THEN** all nine columns (Name, Status, Size, Downloaded, ↓ Speed, ↑ Speed, ETA, Ratio, Progress) are visible with correct values
+
+#### Scenario: Rows have comfortable vertical spacing
+
+- **WHEN** the torrent list is rendered
+- **THEN** row padding provides at least 10 px of vertical space per row and rows are visually separated
 
 #### Scenario: Progress bar is green while downloading
 
@@ -63,6 +68,11 @@ The list SHALL display one row per torrent, rendered inside a scrollable region.
 - **WHEN** a torrent's status is Stopped (status = 0) or any non-active state
 - **THEN** the progress bar fill color is gray
 
+#### Scenario: Progress bar has rounded ends
+
+- **WHEN** any progress bar is rendered in a torrent row
+- **THEN** both the track background and the filled bar have fully rounded corners (radius 100.0)
+
 #### Scenario: Zero transfer speeds shown as dash
 
 - **WHEN** a torrent's download or upload rate is 0 bytes/s
@@ -78,29 +88,6 @@ The list SHALL display one row per torrent, rendered inside a scrollable region.
 - **WHEN** a torrent's upload ratio is -1 or 0 with no data ever uploaded
 - **THEN** the Ratio column displays "—"
 
-## ADDED Requirements
-
-### Requirement: Column sort
-
-The torrent list SHALL support single-column sorting on any column. The sort is applied in-memory on the currently fetched torrent data. Sort state consists of an active sort column (if any) and a sort direction (ascending or descending). Sorting SHALL be a pure view-time operation that does not modify the underlying fetched data.
-
-#### Scenario: List is sorted when a sort is active
-
-- **WHEN** a sort column and direction are set
-- **THEN** all rows appear in the order determined by that column and direction
-
-#### Scenario: List preserves daemon order when no sort is active
-
-- **WHEN** no sort column is set
-- **THEN** rows appear in the order returned by the most recent `torrent-get` response
-
-#### Scenario: Sort survives a data refresh
-
-- **WHEN** the daemon returns a new `torrent-get` response while a sort is active
-- **THEN** the list is re-sorted by the active column and direction automatically
-
-## ADDED Requirements
-
 ### Requirement: Toolbar uses M3 icon button and tonal/primary styles
 
 All icon-only toolbar action buttons (Pause, Resume, Delete, Settings, Disconnect, theme toggle) SHALL use the `icon_button` helper style (transparent background, circular hover highlight). The primary Add Torrent action SHALL use the `m3_primary_button` style. All secondary/cancel actions SHALL use the `m3_tonal_button` style.
@@ -115,18 +102,25 @@ All icon-only toolbar action buttons (Pause, Resume, Delete, Settings, Disconnec
 - **WHEN** the torrent list toolbar is rendered
 - **THEN** the Add Torrent button has fully rounded ends and the solid brand primary color as background
 
+## ADDED Requirements
+
 ### Requirement: Empty state view
 
-When the torrent list contains no torrents, the list area SHALL display the Clutch logo image centered at reduced opacity (~25%), accompanied by muted helper text ("No torrents. Add one with +"). The empty state SHALL not be shown while the app is still loading.
+When the torrent list contains no torrents, the list area SHALL display the Clutch logo image centered and desaturated (rendered at reduced opacity, approximately 25%), accompanied by muted helper text below it (e.g., "No torrents. Add one with +"). The empty state SHALL not be shown while the app is still loading torrent data.
 
 #### Scenario: Empty state shown when list is empty
 
 - **WHEN** torrent data has been received and the list contains zero items
 - **THEN** the centered logo and helper text are shown instead of an empty scroll area
 
+#### Scenario: Empty state not shown during loading
+
+- **WHEN** the app is waiting for the first torrent list response
+- **THEN** no empty state is shown (normal loading behavior applies)
+
 ### Requirement: M3-styled delete confirmation dialog
 
-The delete torrent confirmation dialog SHALL use `m3_tonal_button` for Cancel and a danger-colored pill button for Delete. The button row SHALL be right-aligned.
+The delete torrent confirmation dialog SHALL use `m3_tonal_button` for the "Cancel" action and a danger-colored pill button for the "Delete" action. The button row SHALL be right-aligned. No iced built-in button styles SHALL be used in this dialog.
 
 #### Scenario: Cancel uses tonal button style
 
@@ -136,13 +130,19 @@ The delete torrent confirmation dialog SHALL use `m3_tonal_button` for Cancel an
 #### Scenario: Delete uses danger pill style
 
 - **WHEN** the delete confirmation dialog is shown
-- **THEN** the Delete button renders with a destructive pill background
+- **THEN** the Delete button renders with a destructive (danger-red) pill background
 
 ### Requirement: Column header tooltips
 
-Each column header button SHALL show a tooltip (styled with `m3_tooltip`) on hover displaying the full column name.
+Each column header button SHALL show a tooltip (styled with `m3_tooltip`) on hover that displays the full, unabbreviated column name (e.g., "Downloaded", "↓ Download Speed", "Upload Speed", "Time Remaining").
 
 #### Scenario: Hovering a column header shows its full name
 
 - **WHEN** the user hovers over a column header
-- **THEN** a tooltip appears with the full column name in the `m3_tooltip` elevated dark style
+- **THEN** a tooltip appears with the full column name in the `m3_tooltip` dark elevated style
+
+
+#### Scenario: Empty state disappears when torrents are added
+
+- **WHEN** the torrent list transitions from empty to containing at least one torrent
+- **THEN** the empty state view is replaced by the normal torrent list rows

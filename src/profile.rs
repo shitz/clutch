@@ -225,9 +225,10 @@ impl ProfileStore {
         match keyring::Entry::new(KEYRING_SERVICE, &id.to_string()) {
             Ok(entry) => {
                 if let Err(e) = entry.delete_password()
-                    && !matches!(e, keyring::Error::NoEntry) {
-                        tracing::warn!(profile = %id, error = %e, "Failed to delete password from keyring");
-                    }
+                    && !matches!(e, keyring::Error::NoEntry)
+                {
+                    tracing::warn!(profile = %id, error = %e, "Failed to delete password from keyring");
+                }
             }
             Err(e) => {
                 tracing::warn!(profile = %id, error = %e, "Failed to open keyring entry for delete");
@@ -246,9 +247,10 @@ impl ProfileStore {
     pub fn adopt_last_connected(&mut self, from: &ProfileStore) {
         self.last_connected = from.last_connected;
         if let Some(id) = self.last_connected
-            && self.get(id).is_none() {
-                self.last_connected = None;
-            }
+            && self.get(id).is_none()
+        {
+            self.last_connected = None;
+        }
     }
 }
 

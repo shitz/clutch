@@ -7,6 +7,9 @@ mod theme;
 
 fn main() -> iced::Result {
     tracing_subscriber::fmt::init();
+
+    let icon = iced::window::icon::from_file_data(crate::theme::ICON_256_BYTES, None).ok();
+
     iced::application(app::AppState::new, app::update, app::view)
         .title("Clutch")
         .subscription(app::subscription)
@@ -19,8 +22,9 @@ fn main() -> iced::Result {
         .window(iced::window::Settings {
             min_size: Some(iced::Size {
                 width: 900.0,
-                height: 500.0,
+                height: 600.0,
             }),
+            icon,
             ..Default::default()
         })
         .run()
