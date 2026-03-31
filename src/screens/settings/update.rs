@@ -2,7 +2,7 @@
 
 use iced::Task;
 
-use crate::profile::{ConnectionProfile, ProfileStore};
+use crate::profile::ConnectionProfile;
 
 use super::draft::{ProfileDraft, TestResult};
 use super::state::{PendingNavigation, SettingsScreen};
@@ -135,7 +135,6 @@ impl SettingsScreen {
                     return (Task::none(), None);
                 };
                 self.profiles.retain(|p| p.id != id);
-                ProfileStore::delete_password(id);
                 if self.selected_profile_id == Some(id) {
                     self.selected_profile_id = None;
                     self.draft = None;
@@ -188,11 +187,16 @@ impl SettingsScreen {
                 let Some(d) = &mut self.draft else {
                     return (Task::none(), None);
                 };
-                if !d.password_changed
-                    && d.password.is_empty()
-                    && let Some(pw) = ProfileStore::get_password(d.id)
-                {
-                    d.password = pw;
+                // If the profile has a saved password and the user hasn't typed a new one,
+                // delegate to app::update which has access to the decrypted passphrase.
+                if d.has_saved_password && !d.password_changed {
+                    let profile_id = d.id;
+                    d.testing = true;
+                    d.test_result = None;
+                    return (
+                        Task::none(),
+                        Some(SettingsResult::TestConnectionWithId { profile_id }),
+                    );
                 }
                 let Some(creds) = d.to_credentials() else {
                     return (Task::none(), None);
@@ -238,15 +242,33 @@ impl SettingsScreen {
                     } else {
                         Some(draft.username.clone())
                     };
-                }
-                if draft.password_changed && !draft.password.is_empty() {
-                    ProfileStore::set_password(id, &draft.password);
+                    // Clear encrypted password if user explicitly set an empty password.
+                    if draft.password_changed && draft.password.is_empty() {
+                        p.encrypted_password = None;
+                    }
                 }
                 self.dirty = false;
                 if let Some(p) = self.profiles.iter().find(|p| p.id == id) {
                     self.draft = Some(ProfileDraft::from_profile(p));
                 }
                 let store = self.build_store_snapshot();
+                // If the user entered a new non-empty password, hand it off to app::update
+                // for passphrase-protected encryption rather than storing it directly.
+                if draft.password_changed && !draft.password.is_empty() {
+                    // The password will be encrypted asynchronously. Mark the draft so
+                    // the placeholder shows immediately rather than after the next reload.
+                    if let Some(d) = &mut self.draft {
+                        d.has_saved_password = true;
+                    }
+                    return (
+                        Task::none(),
+                        Some(SettingsResult::SaveWithPassword {
+                            profile_id: id,
+                            password: draft.password.clone(),
+                            store,
+                        }),
+                    );
+                }
                 let store_clone = store.clone();
                 let task = Task::perform(async move { store_clone.save().await }, |_| {
                     Message::RevertClicked

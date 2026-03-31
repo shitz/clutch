@@ -1,4 +1,6 @@
 mod app;
+mod auth;
+mod crypto;
 mod format;
 mod profile;
 mod rpc;

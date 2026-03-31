@@ -3,17 +3,15 @@
 //! [`ProfileStore`] is the root config structure, serialized as TOML to the
 //! OS-appropriate config directory (e.g. `~/.config/clutch/config.toml` on Linux,
 //! `~/Library/Application Support/clutch/config.toml` on macOS). Passwords are
-//! stored separately in the OS keyring — they **never** appear in the config file.
-//!
-//! # Keyring keying
-//!
-//! Service name: `"clutch"`, account: profile UUID string.
-//! This means renames and host changes never orphan a stored password.
+//! stored encrypted inside the config file, protected by a master passphrase.
+//! The master passphrase is held in memory for the session and never written to disk.
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::crypto;
 
 // ── Theme preference ──────────────────────────────────────────────────────────
 
@@ -69,12 +67,11 @@ impl Default for GeneralSettings {
 
 /// A saved Transmission daemon connection.
 ///
-/// Passwords are **not** stored here; they live in the OS keyring keyed by the
-/// profile's UUID. See [`ProfileStore::get_password`].
+/// The optional password is stored encrypted in [`encrypted_password`].
+/// It is decrypted on demand using the session-scoped master passphrase.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionProfile {
-    /// UUID v4 — stable identifier used as the keyring account key.
-    /// Generated once at profile creation; never shown to the user.
+    /// UUID v4 — stable identifier. Generated once at profile creation.
     pub id: Uuid,
     /// Human-readable display name (e.g. "Home NAS").
     pub name: String,
@@ -84,6 +81,12 @@ pub struct ConnectionProfile {
     pub port: u16,
     /// Optional Basic Auth username.
     pub username: Option<String>,
+    /// Encrypted Transmission password, or `None` when no password is set.
+    ///
+    /// Packed format: `"salt_b64$nonce_b64$ciphertext_b64"` — a single TOML string
+    /// value, avoiding sub-table serialization issues.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encrypted_password: Option<String>,
 }
 
 impl ConnectionProfile {
@@ -95,13 +98,27 @@ impl ConnectionProfile {
             host: "localhost".to_owned(),
             port: 9091,
             username: None,
+            encrypted_password: None,
         }
     }
 
-    /// Build [`crate::rpc::TransmissionCredentials`] for this profile,
-    /// fetching the password from the OS keyring.
-    pub fn credentials(&self) -> crate::rpc::TransmissionCredentials {
-        let password = ProfileStore::get_password(self.id);
+    /// Build [`crate::rpc::TransmissionCredentials`] for this profile.
+    ///
+    /// If the profile has an `encrypted_password` and a `passphrase` is
+    /// provided, the password is decrypted on the spot. If decryption fails
+    /// (wrong passphrase or tampered data) the connection proceeds without a
+    /// password and a warning is logged.
+    pub fn credentials(&self, passphrase: Option<&str>) -> crate::rpc::TransmissionCredentials {
+        let password = match (&self.encrypted_password, passphrase) {
+            (Some(packed), Some(pw)) => {
+                let decrypted = crypto::decrypt_password(pw, packed);
+                if decrypted.is_none() {
+                    tracing::warn!(profile = %self.id, "Password decryption failed; connecting without password");
+                }
+                decrypted
+            }
+            _ => None,
+        };
         crate::rpc::TransmissionCredentials {
             host: self.host.clone(),
             port: self.port,
@@ -113,7 +130,6 @@ impl ConnectionProfile {
 
 // ── Profile store ─────────────────────────────────────────────────────────────
 
-const KEYRING_SERVICE: &str = "clutch";
 const CONFIG_FILE: &str = "config.toml";
 const CONFIG_DIR: &str = "clutch";
 
@@ -125,10 +141,13 @@ const CONFIG_DIR: &str = "clutch";
 pub struct ProfileStore {
     /// UUID of the most recently successfully connected profile.
     pub last_connected: Option<Uuid>,
+    /// Argon2id PHC hash string of the master passphrase, or `None` if not yet configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub master_passphrase_hash: Option<String>,
     /// Application-wide preferences.
     #[serde(default)]
     pub general: GeneralSettings,
-    /// All saved connection profiles (excluding passwords).
+    /// All saved connection profiles (including encrypted passwords).
     #[serde(default)]
     pub profiles: Vec<ConnectionProfile>,
 }
@@ -176,80 +195,34 @@ impl ProfileStore {
         Ok(())
     }
 
-    // ── Keyring helpers ───────────────────────────────────────────────────────
-
-    /// Retrieve the password for the given profile UUID from the OS keyring.
-    ///
-    /// Returns `None` on any error (missing entry, unavailable keyring, etc.)
-    /// and logs a warning. The app can still connect without a password if the
-    /// daemon allows it.
-    pub fn get_password(id: Uuid) -> Option<String> {
-        let entry = match keyring::Entry::new(KEYRING_SERVICE, &id.to_string()) {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!(profile = %id, error = %e, "Failed to open keyring entry");
-                return None;
-            }
-        };
-        match entry.get_password() {
-            Ok(pw) => Some(pw),
-            Err(keyring::Error::NoEntry) => None,
-            Err(e) => {
-                tracing::warn!(profile = %id, error = %e, "Failed to retrieve password from keyring");
-                None
-            }
-        }
-    }
-
-    /// Store a password in the OS keyring for the given profile UUID.
-    ///
-    /// Logs a warning if the keyring is unavailable; does not panic or return
-    /// an error so the profile is still saved without a password.
-    pub fn set_password(id: Uuid, password: &str) {
-        match keyring::Entry::new(KEYRING_SERVICE, &id.to_string()) {
-            Ok(entry) => {
-                if let Err(e) = entry.set_password(password) {
-                    tracing::warn!(profile = %id, error = %e, "Failed to save password to keyring");
-                }
-            }
-            Err(e) => {
-                tracing::warn!(profile = %id, error = %e, "Failed to open keyring entry for write");
-            }
-        }
-    }
-
-    /// Delete the password for a profile from the OS keyring.
-    ///
-    /// Silently ignores `NoEntry`; logs other errors without failing.
-    pub fn delete_password(id: Uuid) {
-        match keyring::Entry::new(KEYRING_SERVICE, &id.to_string()) {
-            Ok(entry) => {
-                if let Err(e) = entry.delete_password()
-                    && !matches!(e, keyring::Error::NoEntry)
-                {
-                    tracing::warn!(profile = %id, error = %e, "Failed to delete password from keyring");
-                }
-            }
-            Err(e) => {
-                tracing::warn!(profile = %id, error = %e, "Failed to open keyring entry for delete");
-            }
-        }
-    }
-
     /// Find a profile by UUID.
     #[must_use]
     pub fn get(&self, id: Uuid) -> Option<&ConnectionProfile> {
         self.profiles.iter().find(|p| p.id == id)
     }
 
-    /// Merge `last_connected` from another store, clearing it if the target
-    /// profile no longer exists.
-    pub fn adopt_last_connected(&mut self, from: &ProfileStore) {
+    /// Merge fields not managed by the settings UI from `from` into `self`.
+    ///
+    /// Called whenever a settings-screen snapshot replaces the app-level store,
+    /// so that `last_connected`, `master_passphrase_hash`, and per-profile
+    /// `encrypted_password` values are never silently cleared.
+    pub fn adopt_from(&mut self, from: &ProfileStore) {
         self.last_connected = from.last_connected;
         if let Some(id) = self.last_connected
             && self.get(id).is_none()
         {
             self.last_connected = None;
+        }
+        self.master_passphrase_hash = from.master_passphrase_hash.clone();
+        // Preserve encrypted passwords for profiles whose password was not
+        // changed in the settings form (draft initialises password as empty
+        // and only sets `encrypted_password = None` when explicitly cleared).
+        for profile in &mut self.profiles {
+            if profile.encrypted_password.is_none() {
+                if let Some(src) = from.get(profile.id) {
+                    profile.encrypted_password = src.encrypted_password.clone();
+                }
+            }
         }
     }
 }

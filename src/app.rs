@@ -22,7 +22,10 @@
 use uuid::Uuid;
 
 use iced::{Element, Subscription, Task, Theme};
+use secrecy::{ExposeSecret, SecretString};
 
+use crate::auth::{AuthDialog, PendingAction};
+use crate::crypto;
 use crate::profile::{ProfileStore, resolve_theme_config};
 use crate::screens::connection::{self, ConnectionScreen};
 use crate::screens::main_screen::{self, MainScreen};
@@ -63,6 +66,31 @@ pub enum Message {
     // -- Settings screen (delegated) --
     Settings(settings::Message),
 
+    // -- Auth dialog --
+    AuthSetupPassphraseChanged(String),
+    AuthSetupConfirmChanged(String),
+    AuthUnlockPassphraseChanged(String),
+    SubmitSetupPassphrase,
+    SubmitUnlockPassphrase,
+    DismissAuthDialog,
+    /// Returned when the async passphrase hash + encryption task completes.
+    SetupPassphraseComplete {
+        passphrase: String,
+        hash: String,
+        profile_id: Uuid,
+        encrypted_password: String,
+    },
+    /// Returned when the async passphrase verify task completes.
+    UnlockPassphraseResult {
+        passphrase: String,
+        valid: bool,
+    },
+    /// Returned when an async encrypt-only task completes (already-unlocked save).
+    EncryptPasswordReady {
+        profile_id: Uuid,
+        encrypted_password: String,
+    },
+
     /// Fire-and-forget: result of a background save; no state change needed.
     Noop,
 }
@@ -95,6 +123,11 @@ pub struct AppState {
     /// Stashed main screen while Settings is open, so we can restore it
     /// without a reconnect/refetch when the user closes Settings.
     pub stashed_main: Option<MainScreen>,
+    /// Master passphrase held in memory for the session (never written to disk).
+    /// Wrapped in `SecretString` so the memory is zeroized on drop.
+    pub unlocked_passphrase: Option<SecretString>,
+    /// Active auth dialog, rendered as a modal overlay over the current screen.
+    pub active_dialog: Option<AuthDialog>,
 }
 
 impl AppState {
@@ -112,6 +145,8 @@ impl AppState {
             profiles: initial.clone(),
             active_profile: None,
             stashed_main: None,
+            unlocked_passphrase: None,
+            active_dialog: None,
         };
         // Re-emit the already-loaded store via Task::done so ProfilesLoaded
         // runs on the first event-loop tick (auto-connect, launchpad rebuild)
@@ -178,9 +213,10 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
             Ok(info) => {
                 let id = state.profiles.last_connected.expect("set before probe");
                 let profile = state.profiles.get(id).expect("profile must exist");
-                let creds = profile.credentials();
+                let creds = profile.credentials(
+                    state.unlocked_passphrase.as_ref().map(|s| s.expose_secret().as_str()),
+                );
                 let sid = info.session_id.clone();
-                state.active_profile = Some(id);
                 let profile_name = profile.name.clone();
                 tracing::info!(profile = %profile_name, "Auto-connect succeeded");
                 state.screen = Screen::Main(MainScreen::new_with_label(
@@ -218,7 +254,38 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
             open_settings(state, SettingsTab::Connections);
             return Task::none();
         }
+        Message::Connection(connection::Message::ConnectProfile(id)) => {
+            let id = *id;
+            let Some(profile) = state.profiles.get(id) else {
+                return Task::none();
+            };
+            // If the profile has an encrypted password and the passphrase is not
+            // yet unlocked, show the unlock dialog before connecting.
+            if profile.encrypted_password.is_some() && state.unlocked_passphrase.is_none() {
+                state.active_dialog = Some(AuthDialog::Unlock {
+                    pending_action: PendingAction::ConnectToProfile(id),
+                    passphrase_input: String::new(),
+                    error: None,
+                    is_processing: false,
+                });
+                return Task::none();
+            }
+            // Passphrase available (or no password required) — build creds and connect.
+            let creds = profile.credentials(
+                state.unlocked_passphrase.as_ref().map(|s| s.expose_secret().as_str()),
+            );
+            return Task::done(Message::Connection(connection::Message::ConnectWithCreds {
+                profile_id: id,
+                creds,
+            }));
+        }
         _ => {}
+    }
+
+    // ── Auth dialog messages ──────────────────────────────────────────────────
+
+    if let Some(task) = crate::auth::handle_message(state, &message) {
+        return task;
     }
 
     // ── Per-screen dispatch ───────────────────────────────────────────────────
@@ -282,7 +349,7 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 theme_config,
                                 mut store,
                             } => {
-                                store.adopt_last_connected(&state.profiles);
+                                store.adopt_from(&state.profiles);
                                 state.profiles = store;
                                 state.theme = resolve_theme_config(theme_config);
                                 // Propagate new interval to stashed main (if settings were
@@ -299,7 +366,7 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 ));
                             }
                             settings::SettingsResult::StoreUpdated(mut store) => {
-                                store.adopt_last_connected(&state.profiles);
+                                store.adopt_from(&state.profiles);
                                 state.profiles = store;
                                 // Re-save so last_connected is not lost.
                                 let snap = state.profiles.clone();
@@ -314,11 +381,17 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             } => {
                                 // Re-probe using AutoConnectResult so the main screen
                                 // loads fresh session info with updated credentials.
+                                store.adopt_from(&state.profiles);
                                 store.last_connected = Some(profile_id);
                                 state.profiles = store;
                                 state.active_profile = Some(profile_id);
                                 let profile = state.profiles.get(profile_id).expect("just saved");
-                                let creds = profile.credentials();
+                                let creds = profile.credentials(
+                                    state
+                                        .unlocked_passphrase
+                                        .as_ref()
+                                        .map(|s| s.expose_secret().as_str()),
+                                );
                                 let url = creds.rpc_url();
                                 let probe = Task::perform(
                                     async move {
@@ -331,7 +404,7 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 return task.map(Message::Settings).chain(probe);
                             }
                             settings::SettingsResult::Closed(mut store) => {
-                                store.adopt_last_connected(&state.profiles);
+                                store.adopt_from(&state.profiles);
                                 state.profiles = store;
                                 // Restore the stashed main screen if available —
                                 // this avoids a reconnect/refetch.
@@ -343,7 +416,8 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 if let Some(id) = state.active_profile
                                     && let Some(profile) = state.profiles.get(id)
                                 {
-                                    let creds = profile.credentials();
+                                    let creds =
+                                        profile.credentials(state.unlocked_passphrase.as_ref().map(|s| s.expose_secret().as_str()));
                                     state.screen = Screen::Main(MainScreen::new_with_label(
                                         creds,
                                         String::new(),
@@ -358,6 +432,90 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                     &state.profiles.profiles,
                                 ));
                             }
+                            settings::SettingsResult::SaveWithPassword {
+                                profile_id,
+                                password,
+                                mut store,
+                            } => {
+                                store.adopt_from(&state.profiles);
+                                state.profiles = store;
+                                match &state.profiles.master_passphrase_hash {
+                                    None => {
+                                        state.active_dialog =
+                                            Some(AuthDialog::SetupPassphrase {
+                                                pending_profile_id: profile_id,
+                                                pending_password: password,
+                                                passphrase_input: String::new(),
+                                                confirm_input: String::new(),
+                                                error: None,
+                                                is_processing: false,
+                                            });
+                                    }
+                                    Some(_) if state.unlocked_passphrase.is_none() => {
+                                        state.active_dialog = Some(AuthDialog::Unlock {
+                                            pending_action: PendingAction::SavePassword {
+                                                profile_id,
+                                                password,
+                                            },
+                                            passphrase_input: String::new(),
+                                            error: None,
+                                            is_processing: false,
+                                        });
+                                    }
+                                    Some(_) => {
+                                        // Passphrase already unlocked — encrypt immediately.
+                                        let passphrase = state
+                                            .unlocked_passphrase
+                                            .as_ref()
+                                            .unwrap()
+                                            .expose_secret()
+                                            .to_owned();
+                                        let encrypt_task = Task::perform(
+                                            async move {
+                                                let creds =
+                                                    tokio::task::spawn_blocking(move || {
+                                                        crypto::encrypt_password(
+                                                            &passphrase,
+                                                            &password,
+                                                        )
+                                                    })
+                                                    .await
+                                                    .expect("encrypt task panicked");
+                                                (profile_id, creds)
+                                            },
+                                            |(pid, ep)| Message::EncryptPasswordReady {
+                                                profile_id: pid,
+                                                encrypted_password: ep,
+                                            },
+                                        );
+                                        return task.map(Message::Settings).chain(encrypt_task);
+                                    }
+                                }
+                            }
+                            settings::SettingsResult::TestConnectionWithId { profile_id } => {
+                                // Use the profile's real (decrypted) credentials for the test.
+                                let passphrase = state
+                                    .unlocked_passphrase
+                                    .as_ref()
+                                    .map(|s| s.expose_secret().as_str());
+                                if let Some(profile) = state.profiles.get(profile_id) {
+                                    let creds = profile.credentials(passphrase);
+                                    let url = creds.rpc_url();
+                                    let probe = Task::perform(
+                                        async move {
+                                            crate::rpc::session_get(&url, &creds, "")
+                                                .await
+                                                .map_err(|e| e.to_string())
+                                        },
+                                        |r| {
+                                            Message::Settings(
+                                                settings::Message::TestConnectionResult(r),
+                                            )
+                                        },
+                                    );
+                                    return task.map(Message::Settings).chain(probe);
+                                }
+                            }
                         }
                     }
                     task.map(Message::Settings)
@@ -368,13 +526,14 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
     }
 }
 
-/// Render the current screen.
+/// Render the current screen, wrapping it in the auth dialog overlay if needed.
 pub fn view(state: &AppState) -> Element<'_, Message> {
-    match &state.screen {
+    let base: Element<'_, Message> = match &state.screen {
         Screen::Connection(conn) => conn.view().map(Message::Connection),
         Screen::Main(main) => main.view(state.theme).map(Message::Main),
         Screen::Settings(settings) => settings.view().map(Message::Settings),
-    }
+    };
+    crate::auth::view_overlay(state.active_dialog.as_ref(), base)
 }
 
 /// Return active subscriptions.

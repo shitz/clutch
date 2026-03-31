@@ -85,6 +85,20 @@ pub enum SettingsResult {
     StoreUpdated(ProfileStore),
     /// User closed the Settings screen; carry updated store to AppState.
     Closed(ProfileStore),
+    /// Profile was saved and has a non-empty password that needs encrypting.
+    ///
+    /// The store already contains the updated profile (non-password fields).
+    /// The caller must encrypt `password` using the master passphrase and store
+    /// the result as `ConnectionProfile::encrypted_password`.
+    SaveWithPassword {
+        profile_id: Uuid,
+        password: String,
+        store: ProfileStore,
+    },
+    /// Test connection requested for a profile that already has a saved (encrypted) password
+    /// but the draft has not been changed. The caller must decrypt the password and run
+    /// the RPC probe, routing the `TestConnectionResult` back to the settings screen.
+    TestConnectionWithId { profile_id: Uuid },
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

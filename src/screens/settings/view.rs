@@ -35,7 +35,7 @@ impl SettingsScreen {
             let title = format!("Delete \"{}\"?", name);
             let dialog = self.view_overlay_dialog(
                 title,
-                "This cannot be undone. The saved password will also be removed from the system keyring.",
+                "This cannot be undone. The saved password will also be removed.",
                 vec![
                     ("Cancel", Message::DeleteCancelled, false),
                     ("Delete", Message::DeleteConfirmed, true),
@@ -476,11 +476,18 @@ impl SettingsScreen {
             .align_y(Alignment::Center),
             row![
                 text("Password").width(120),
-                text_input("optional", &draft.password)
-                    .on_input(Message::DraftPasswordChanged)
-                    .secure(true)
-                    .padding([12, 16])
-                    .style(crate::theme::m3_text_input)
+                text_input(
+                    if draft.has_saved_password && !draft.password_changed {
+                        "••••••••"
+                    } else {
+                        "optional"
+                    },
+                    &draft.password
+                )
+                .on_input(Message::DraftPasswordChanged)
+                .secure(true)
+                .padding([12, 16])
+                .style(crate::theme::m3_text_input)
             ]
             .spacing(8)
             .align_y(Alignment::Center),

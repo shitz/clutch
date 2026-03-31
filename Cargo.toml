@@ -1,16 +1,19 @@
 [package]
 name = "clutch"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2024"
 
 [dependencies]
+argon2 = "0.5"
 base64 = "0.22"
+chacha20poly1305 = "0.10"
 dark-light = "1"
 dirs = "5"
 iced = { version = "0.14", features = ["tokio", "canvas", "image"] }
 iced_aw = { version = "0.13", features = ["tabs"] }
-keyring = "2"
 lava_torrent = "0.11"
+rand = "0.8"
+secrecy = { version = "0.8", features = ["alloc"] }
 reqwest = { version = "0.12", features = ["json"] }
 rfd = "0.15"
 serde = { version = "1", features = ["derive"] }

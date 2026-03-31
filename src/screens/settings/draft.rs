@@ -17,6 +17,10 @@ pub struct ProfileDraft {
     pub username: String,
     pub password: String,
     pub password_changed: bool,
+    /// `true` when the profile already has an encrypted password stored on disk.
+    /// Used to show a placeholder indicator and to route test-connection through
+    /// the existing encrypted credentials when the user has not entered a new password.
+    pub has_saved_password: bool,
     pub test_result: Option<TestResult>,
     pub testing: bool,
 }
@@ -38,6 +42,7 @@ impl ProfileDraft {
             username: profile.username.clone().unwrap_or_default(),
             password: String::new(),
             password_changed: false,
+            has_saved_password: profile.encrypted_password.is_some(),
             test_result: None,
             testing: false,
         }
@@ -52,6 +57,7 @@ impl ProfileDraft {
             username: String::new(),
             password: String::new(),
             password_changed: false,
+            has_saved_password: false,
             test_result: None,
             testing: false,
         }

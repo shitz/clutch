@@ -73,6 +73,7 @@ impl SettingsScreen {
     pub fn build_store_snapshot(&self) -> ProfileStore {
         ProfileStore {
             last_connected: None,
+            master_passphrase_hash: None,
             general: GeneralSettings {
                 theme: self.theme_draft,
                 refresh_interval: self

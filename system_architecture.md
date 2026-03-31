@@ -23,8 +23,10 @@ the `iced` 0.14 GUI framework using the Elm architecture.
 src/
 ├── main.rs                 Entry point: tracing, fonts, window constraints, iced launch.
 ├── app.rs                  AppState, Screen router, Message enum, top-level update/view/subscription.
+├── auth.rs                 PendingAction, AuthDialog, handle_message(), view_overlay() — passphrase dialogs.
+├── crypto.rs               Argon2id KDF, ChaCha20-Poly1305 AEAD helpers, passphrase hash/verify.
 ├── format.rs               Shared formatting helpers (size, speed, ETA, duration).
-├── profile.rs              ProfileStore, ConnectionProfile, GeneralSettings, ThemeConfig, keyring.
+├── profile.rs              ProfileStore, ConnectionProfile, GeneralSettings, ThemeConfig.
 ├── theme.rs                Material Design 3 palettes, icon font, shared widget styles.
 ├── rpc/
 │   ├── mod.rs              Re-exports.
@@ -88,12 +90,23 @@ pub enum Message {
     Connection(connection::Message),
     Main(main_screen::Message),
     Settings(settings::Message),
+    // Auth dialog messages (handled by auth::handle_message before per-screen dispatch)
+    AuthSetupPassphraseChanged(String),
+    AuthSetupConfirmChanged(String),
+    AuthUnlockPassphraseChanged(String),
+    SubmitSetupPassphrase,
+    SubmitUnlockPassphrase,
+    DismissAuthDialog,
+    SetupPassphraseComplete { passphrase, hash, profile_id, encrypted_password },
+    UnlockPassphraseResult { passphrase, valid },
+    EncryptPasswordReady { profile_id, encrypted_password },
     Noop,
 }
 ```
 
 `app::update()` handles startup messages and global intercepts (Disconnect, OpenSettings,
-ManageProfiles), then dispatches to the active screen.
+ManageProfiles, ConnectProfile passphrase check), then routes auth dialog messages to
+`auth::handle_message()`, then dispatches to the active screen.
 
 ---
 
@@ -139,22 +152,25 @@ Full-screen editor with two tabs:
   Settings groups wrapped in `m3_card` containers. Action bar: right-aligned "Undo" (`m3_tonal_button`)
   - "Save" (`m3_primary_button`).
 - **Connections** — Master-detail profile list (left sidebar with tonal selection wash; right form).
-  Edit name, host, port, username, password with `m3_text_input` fields. "Test Connection"
-  (`m3_tonal_button`). Password loaded from OS keyring on demand only. Action bar mirrors General tab.
+  Edit name, host, port, username, password with `m3_text_input` fields. The password field shows
+  a `"••••••••"` placeholder when a password is saved (write-only UX; the plaintext is never shown).
+  "Test Connection" uses the stored encrypted credentials via the app-level passphrase when the
+  draft password field is unchanged. Action bar mirrors General tab.
 - **About** — Version info.
 
-Overlay modal dialogs (delete confirm, unsaved-change guard) are displayed as fixed-width (360 px)
-cards centered on a dark scrim. Buttons are right-aligned: dismissing action (`m3_tonal_button`)
-left, affirmative/destructive action (danger pill) rightmost.
+Overlay modal dialogs (delete confirm, unsaved-change guard, passphrase setup, passphrase unlock)
+are displayed as fixed-width cards centered on a dark scrim. Buttons are right-aligned.
 
 `update()` returns `(Task<Message>, Option<SettingsResult>)`. Results signal the parent:
 
-| Result                 | Effect                                              |
-| ---------------------- | --------------------------------------------------- |
-| `GeneralSettingsSaved` | Update theme + refresh interval.                    |
-| `ActiveProfileSaved`   | Reconnect with updated credentials.                 |
-| `StoreUpdated`         | Persist profile changes (non-active profile).       |
-| `Closed`               | Restore stashed main screen, persist store updates. |
+| Result                 | Effect                                                               |
+| ---------------------- | -------------------------------------------------------------------- |
+| `GeneralSettingsSaved` | Update theme + refresh interval.                                     |
+| `ActiveProfileSaved`   | Reconnect with updated credentials.                                  |
+| `StoreUpdated`         | Persist profile changes (non-active profile).                        |
+| `Closed`               | Restore stashed main screen, persist store updates.                  |
+| `SaveWithPassword`     | Pass new password to `app::update` for passphrase-protected encrypt. |
+| `TestConnectionWithId` | Ask `app::update` to run test probe using decrypted stored password. |
 
 An unsaved-change guard modal prevents accidental data loss on tab switch, profile switch, or close.
 
@@ -194,19 +210,35 @@ the need to pass three separate values through every call site.
 
 ## 8. Profile Store
 
-Persistent config at `dirs::config_dir()/clutch/config.toml` (TOML). Passwords stored in the
-OS keyring (service: `"clutch"`, account: profile UUID).
+Persistent config at `dirs::config_dir()/clutch/config.toml` (TOML). Passwords are encrypted
+inside the config file using Argon2id + ChaCha20-Poly1305; no OS keychain is used.
 
 Key operations:
 
 - `load_sync()` / `load()` — read config from disk (sync for initial theme, async for runtime).
 - `save()` — atomic write (`.tmp` then rename).
-- `get_password()` / `set_password()` / `delete_password()` — OS keyring via `keyring` crate.
-- `adopt_last_connected(from)` — merge `last_connected` from another store, clearing if deleted.
+- `adopt_from(from)` — merge `last_connected`, `master_passphrase_hash`, and per-profile
+  `encrypted_password` from another store instance. Called whenever a settings-screen snapshot
+  replaces the app-level store to prevent silent data loss.
+
+## 9. Credential Encryption
+
+All credential crypto lives in `src/crypto.rs`.
+
+| Function                         | Purpose                                                                                                          |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `encrypt_password(pass, plain)`  | Argon2id KDF (random 16B salt) → ChaCha20-Poly1305 encrypt. Returns `"salt$nonce$ct"` (URL-safe base64, no pad). |
+| `decrypt_password(pass, packed)` | Splits packed string, re-derives key, decrypts. Returns `None` on any error.                                     |
+| `hash_passphrase(pass)`          | Argon2id PHC string (m=19456, t=2, p=1). Stored in `ProfileStore::master_passphrase_hash`.                       |
+| `verify_passphrase(pass, hash)`  | Parses PHC string, verifies. Returns `false` on any error.                                                       |
+
+All KDF operations run on `tokio::task::spawn_blocking` to avoid blocking the iced frame loop.
+The passphrase is stored as `AppState.unlocked_passphrase: Option<secrecy::SecretString>`, which
+zeroizes its backing memory on drop.
 
 ---
 
-## 9. Theme
+## 10. Theme
 
 Material Design 3 dark and light palettes seeded from Clutch brand colors. Theme preference
 (`Light`/`Dark`/`System`) is resolved at startup and on change via `dark_light::detect()`.
@@ -233,13 +265,13 @@ All widget styles are centralised in `theme.rs`. Key exports:
 
 ---
 
-## 10. Observability
+## 11. Observability
 
 Structured logging via `tracing`. Run with `RUST_LOG=clutch=debug` for full RPC traces.
 
 ---
 
-## 11. Crate Stack
+## 12. Crate Stack
 
 | Crate                  | Version | Purpose                                |
 | ---------------------- | ------- | -------------------------------------- |
@@ -250,7 +282,10 @@ Structured logging via `tracing`. Run with `RUST_LOG=clutch=debug` for full RPC 
 | `serde` + `serde_json` | 1       | JSON serialization                     |
 | `toml`                 | 0.8     | Config serialization                   |
 | `uuid`                 | 1       | Profile UUIDs                          |
-| `keyring`              | 2       | OS keyring for passwords               |
+| `argon2`               | 0.5     | Argon2id KDF + passphrase hashing      |
+| `chacha20poly1305`     | 0.10    | ChaCha20-Poly1305 AEAD encryption      |
+| `rand`                 | 0.8     | Cryptographically secure random bytes  |
+| `secrecy`              | 0.8     | Zeroizing secret memory wrapper        |
 | `dirs`                 | 5       | Config directory path                  |
 | `dark-light`           | 1       | OS theme detection                     |
 | `tracing`              | 0.1     | Structured logging                     |
@@ -261,9 +296,9 @@ Structured logging via `tracing`. Run with `RUST_LOG=clutch=debug` for full RPC 
 
 ---
 
-## 12. Test Coverage
+## 13. Test Coverage
 
-95 tests across three layers:
+130 tests across three layers:
 
 - **Unit tests** — exercise `update()` logic and formatting helpers in-memory. Cover all screens
   (connection, torrent list, settings, inspector, main screen) and the format module.

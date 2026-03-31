@@ -5,7 +5,7 @@
 //!   plus a "Manage / Add Profile…" button that opens Settings > Connections.
 //! - **Quick Connect** (default when no profiles exist): a one-time ephemeral
 //!   connection form. Credentials are held in memory only — nothing is saved to
-//!   disk or the OS keyring.
+//!   disk or encrypted in the config file.
 
 use iced::widget::{Space, button, column, container, row, scrollable, text, text_input};
 use iced::{Alignment, Element, Length, Task};
@@ -59,6 +59,9 @@ pub enum Message {
     ProbeResult(Result<crate::rpc::SessionInfo, String>),
     /// User clicked "Manage / Add Profile" on the launchpad.
     ManageProfilesClicked,
+    /// Initiate a probe using pre-built credentials (set by app-level intercept).
+    /// Bypasses credential lookup in the connection screen.
+    ConnectWithCreds { profile_id: Uuid, creds: TransmissionCredentials },
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -413,21 +416,25 @@ impl ConnectionScreen {
             }
 
             // ── Saved profile connect ─────────────────────────────────────────
-            Message::ConnectProfile(id) => {
-                let Some(profile) = self.profiles.iter().find(|p| p.id == id) else {
-                    return (Task::none(), None);
-                };
-                let creds = profile.credentials();
+            Message::ConnectProfile(_) => {
+                // Intercepted by app::update before reaching this screen —
+                // it either shows the passphrase dialog or sends ConnectWithCreds.
+                (Task::none(), None)
+            }
+
+            Message::ConnectWithCreds { profile_id, creds } => {
                 let url = creds.rpc_url();
                 self.is_connecting = true;
-                self.connecting_profile_id = Some(id);
+                self.connecting_profile_id = Some(profile_id);
                 self.connecting_creds = Some(creds.clone());
                 self.error = None;
-                tracing::info!(
-                    profile = %profile.name,
-                    host = %creds.host,
-                    "Connecting to saved profile"
-                );
+                if let Some(p) = self.profiles.iter().find(|p| p.id == profile_id) {
+                    tracing::info!(
+                        profile = %p.name,
+                        host = %creds.host,
+                        "Connecting to saved profile"
+                    );
+                }
                 let task = Task::perform(
                     async move {
                         crate::rpc::session_get(&url, &creds, "")
