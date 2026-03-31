@@ -3,6 +3,10 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/shitz/clutch/actions/workflows/ci.yml"><img src="https://github.com/shitz/clutch/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+</p>
+
+<p align="center">
   <img src="assets/screenshot_connection_setup_light.png" alt="Connection setup" width="32%"/>
   <img src="assets/screenshot_main_dark.png" alt="Main torrent list" width="32%"/>
   <img src="assets/screenshot_settings_dark.png" alt="Settings" width="32%"/>
