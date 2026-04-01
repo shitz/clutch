@@ -28,6 +28,9 @@ uuid = { version = "1", features = ["v4", "serde"] }
 wiremock = "0.6"
 tokio = { version = "1", features = ["full"] }
 
+[build-dependencies]
+winres = "0.1"
+
 [package.metadata.packager]
 product-name = "Clutch"
 identifier = "com.github.shitz.clutch"
