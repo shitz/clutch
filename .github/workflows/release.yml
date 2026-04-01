@@ -7,9 +7,11 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  release:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     strategy:
       matrix:
         include:
