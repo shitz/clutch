@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pressing Enter in the Quick Connect form, Add Torrent / Add Link dialog, or the Saved
   Profiles tab triggers the primary CTA (Connect / Add) without requiring a mouse click.
 
+### Changed
+
+- Deleting a torrent now opens a confirmation modal instead of having an inline confirmation step in
+  the toolbar.
+
 ## [0.10.0] - 2026-04-01
 
 ### Added

@@ -15,7 +15,7 @@
 use iced::widget::rule;
 use iced::widget::tooltip;
 use iced::widget::{
-    Space, button, checkbox, column, container, progress_bar, row, scrollable, stack, text,
+    Space, button, checkbox, column, container, opaque, progress_bar, row, scrollable, stack, text,
 };
 use iced::{Alignment, Element, Length};
 
@@ -55,50 +55,7 @@ fn status_label(status: i32) -> &'static str {
 
 pub fn view(state: &TorrentListScreen, theme_mode: crate::app::ThemeMode) -> Element<'_, Message> {
     // ── Toolbar ───────────────────────────────────────────────────────────────
-    let toolbar: Element<Message> = if let Some((del_id, del_local)) = state.confirming_delete {
-        let name = state
-            .torrents
-            .iter()
-            .find(|t| t.id == del_id)
-            .map(|t| t.name.as_str())
-            .unwrap_or("this torrent");
-        row![
-            text(format!("Delete \"{}\"?", name)).align_y(Alignment::Center),
-            checkbox(del_local)
-                .label("Delete local data")
-                .on_toggle(Message::DeleteLocalDataToggled),
-            Space::new(),
-            button("Cancel")
-                .on_press(Message::DeleteCancelled)
-                .padding([10, 20])
-                .style(crate::theme::m3_tonal_button),
-            button("Confirm Delete")
-                .on_press(Message::DeleteConfirmed)
-                .padding([10, 20])
-                .style(|t: &iced::Theme, s| {
-                    let p = t.extended_palette();
-                    let bg = match s {
-                        iced::widget::button::Status::Hovered
-                        | iced::widget::button::Status::Pressed => p.danger.strong.color,
-                        _ => p.danger.base.color,
-                    };
-                    iced::widget::button::Style {
-                        background: Some(iced::Background::Color(bg)),
-                        text_color: p.danger.base.text,
-                        border: iced::Border {
-                            radius: 100.0.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }
-                }),
-        ]
-        .align_y(Alignment::Center)
-        .spacing(8)
-        .into()
-    } else {
-        view_normal_toolbar(state, theme_mode)
-    };
+    let toolbar = view_normal_toolbar(state, theme_mode);
 
     // ── Inline error banner ───────────────────────────────────────────────────
     let error_row: Element<Message> = if let Some(err) = &state.error {
@@ -236,10 +193,97 @@ pub fn view(state: &TorrentListScreen, theme_mode: crate::app::ThemeMode) -> Ele
     .into();
 
     // ── Modal overlay ─────────────────────────────────────────────────────────
-    match &state.add_dialog {
+    let after_add: Element<Message> = match &state.add_dialog {
         AddDialogState::Hidden => main_content,
         dialog_state => stack![main_content, view_add_dialog(dialog_state)].into(),
+    };
+
+    if let Some((del_id, del_local)) = state.confirming_delete {
+        let name = state
+            .torrents
+            .iter()
+            .find(|t| t.id == del_id)
+            .map(|t| t.name.as_str())
+            .unwrap_or("this torrent");
+        stack![after_add, opaque(view_delete_dialog(name, del_local))].into()
+    } else {
+        after_add
     }
+}
+
+fn view_delete_dialog(name: &str, del_local: bool) -> Element<'_, Message> {
+    let card = container(
+        column![
+            text(format!("Delete \"{}\"?", name)).size(18),
+            text("This cannot be undone.").size(13),
+            checkbox(del_local)
+                .label("Also delete local data")
+                .on_toggle(Message::DeleteLocalDataToggled),
+            row![
+                Space::new().width(Length::Fill),
+                button("Cancel")
+                    .on_press(Message::DeleteCancelled)
+                    .padding([10, 24])
+                    .style(crate::theme::m3_tonal_button),
+                button("Confirm Delete")
+                    .on_press(Message::DeleteConfirmed)
+                    .padding([10, 24])
+                    .style(|t: &iced::Theme, s| {
+                        let p = t.extended_palette();
+                        let bg = match s {
+                            button::Status::Hovered | button::Status::Pressed => {
+                                p.danger.strong.color
+                            }
+                            _ => p.danger.base.color,
+                        };
+                        button::Style {
+                            background: Some(iced::Background::Color(bg)),
+                            text_color: p.danger.base.text,
+                            border: iced::Border {
+                                radius: 100.0.into(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }
+                    }),
+            ]
+            .spacing(8)
+            .width(Length::Fill),
+        ]
+        .spacing(16),
+    )
+    .padding(28)
+    .max_width(400.0)
+    .style(|t: &iced::Theme| {
+        let p = t.extended_palette();
+        container::Style {
+            background: Some(iced::Background::Color(p.background.base.color)),
+            border: iced::Border {
+                radius: 12.0.into(),
+                width: 1.0,
+                color: p.background.strong.color,
+            },
+            shadow: iced::Shadow {
+                color: iced::Color::from_rgba8(0, 0, 0, 0.35),
+                offset: iced::Vector::new(0.0, 4.0),
+                blur_radius: 16.0,
+            },
+            ..Default::default()
+        }
+    });
+
+    container(card)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(|_: &iced::Theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgba8(
+                0, 0, 0, 0.70,
+            ))),
+            ..Default::default()
+        })
+        .into()
 }
 
 fn view_normal_toolbar(

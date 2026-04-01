@@ -124,19 +124,52 @@ When the torrent list contains no torrents, the list area SHALL display the Clut
 - **WHEN** torrent data has been received and the list contains zero items
 - **THEN** the centered logo and helper text are shown instead of an empty scroll area
 
-### Requirement: M3-styled delete confirmation dialog
+### Requirement: Delete torrent confirmation modal
 
-The delete torrent confirmation dialog SHALL use `m3_tonal_button` for Cancel and a danger-colored pill button for Delete. The button row SHALL be right-aligned.
+When the user clicks the Delete toolbar button, a modal overlay dialog SHALL appear centered over
+the torrent list. The dialog SHALL contain:
+
+- A title: `Delete "<torrent name>"?`
+- A body message: "This cannot be undone."
+- A **checkbox** labelled "Also delete local data" that controls whether the torrent's downloaded
+  files are removed from disk.
+- A right-aligned button row with **Cancel** (`m3_tonal_button`) and **Confirm Delete** (danger
+  pill button).
+
+The dialog SHALL block interaction with the underlying list via an `opaque` wrapping on the overlay
+layer. The toolbar SHALL remain unchanged (showing normal toolbar icons) while the modal is open.
+
+#### Scenario: Modal appears on delete click
+
+- **WHEN** a torrent is selected and the user clicks the Delete button
+- **THEN** the confirmation modal is shown centered over the torrent list
+- **THEN** the toolbar continues to show normal icons (the modal does not replace the toolbar)
+
+#### Scenario: Cancel dismisses the modal without action
+
+- **WHEN** the confirmation modal is open and the user clicks Cancel
+- **THEN** the modal is dismissed and no RPC call is issued
+
+#### Scenario: Confirm Delete removes the torrent
+
+- **WHEN** the confirmation modal is open and the user clicks Confirm Delete
+- **THEN** a `torrent-remove` RPC call is issued with the selected torrent's id and the current
+  state of the "Also delete local data" checkbox
+
+#### Scenario: Also delete local data checkbox defaults to unchecked
+
+- **WHEN** the confirmation modal first opens
+- **THEN** the "Also delete local data" checkbox is unchecked
 
 #### Scenario: Cancel uses tonal button style
 
-- **WHEN** the delete confirmation dialog is shown
+- **WHEN** the delete confirmation modal is shown
 - **THEN** the Cancel button renders with the tonal wash style
 
-#### Scenario: Delete uses danger pill style
+#### Scenario: Confirm Delete uses danger pill style
 
-- **WHEN** the delete confirmation dialog is shown
-- **THEN** the Delete button renders with a destructive pill background
+- **WHEN** the delete confirmation modal is shown
+- **THEN** the Confirm Delete button renders with a destructive pill background
 
 ### Requirement: Column header tooltips
 
