@@ -4,6 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/shitz/clutch/actions/workflows/ci.yml"><img src="https://github.com/shitz/clutch/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/shitz/clutch/releases/latest"><img src="https://img.shields.io/github/v/release/shitz/clutch" alt="Latest release"></a>
 </p>
 
 <p align="center">
@@ -37,17 +38,52 @@ libraries.
 
 ## Installation
 
-### Prerequisites
+Pre-built installers are attached to every [GitHub Release](https://github.com/shitz/clutch/releases).
 
-- [Rust toolchain](https://rustup.rs/) (stable)
+### macOS (Apple Silicon)
+
+Download `Clutch_<version>_aarch64.dmg`, open it, and drag **Clutch.app** into your Applications folder.
+
+**Gatekeeper workaround:** Because Clutch is unsigned, macOS will refuse to open it with an "app is
+damaged" error. To bypass this, run the following command in Terminal after dragging it to
+Applications:
+
+```sh
+xattr -cr /Applications/Clutch.app
+```
+
+Then open it normally from Finder.
+
+### Windows
+
+Download `clutch_<version>_x64-setup.exe` and run it. Windows SmartScreen may show a blue warning —
+click **More info** → **Run anyway**.
+
+### Linux
+
+**AppImage (universal):**
+
+Download `clutch_<version>_x86_64.AppImage`, make it executable, and run it:
+
+```sh
+chmod +x clutch_<version>_x86_64.AppImage
+./clutch_<version>_x86_64.AppImage
+```
+
+**Debian/Ubuntu (.deb):**
+
+```sh
+sudo dpkg -i clutch_<version>_amd64.deb
+```
 
 ### Build from source
+
+Requires a [Rust toolchain](https://rustup.rs/) (stable).
 
 ```sh
 git clone https://github.com/shitz/clutch.git
 cd clutch
-cargo build --release
-./target/release/clutch
+cargo run --release
 ```
 
 ## How it was built
