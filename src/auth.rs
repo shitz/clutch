@@ -30,6 +30,20 @@ use crate::app::{AppState, Message};
 use crate::crypto;
 use crate::screens::connection;
 
+// ── Stable widget IDs for auth dialog inputs ────────────────────────────────────
+
+pub fn unlock_input_id() -> iced::widget::Id {
+    iced::widget::Id::new("auth_unlock")
+}
+
+pub fn setup_passphrase_id() -> iced::widget::Id {
+    iced::widget::Id::new("auth_setup_passphrase")
+}
+
+pub fn setup_confirm_id() -> iced::widget::Id {
+    iced::widget::Id::new("auth_setup_confirm")
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 /// Action to execute after the unlock passphrase dialog succeeds.
@@ -69,6 +83,34 @@ pub enum AuthDialog {
 /// or `None` if it should be forwarded to the per-screen update handler.
 pub fn handle_message(state: &mut AppState, message: &Message) -> Option<Task<Message>> {
     match message {
+        Message::AuthTabKeyPressed { shift } => {
+            match &state.active_dialog {
+                Some(AuthDialog::SetupPassphrase { .. }) => {
+                    // Two-input ring: passphrase ↔ confirm.
+                    // We don't track which is focused, so we always use focus_next /
+                    // focus_previous which cycles naturally within the opaque overlay.
+                    let task = if *shift {
+                        iced::widget::operation::focus_previous()
+                    } else {
+                        iced::widget::operation::focus_next()
+                    };
+                    Some(task)
+                }
+                // Unlock dialog has one input — Tab is a no-op.
+                Some(AuthDialog::Unlock { .. }) => Some(Task::none()),
+                None => None,
+            }
+        }
+        Message::AuthEnterPressed => match &state.active_dialog {
+            Some(AuthDialog::Unlock { is_processing, .. }) if !*is_processing => {
+                Some(Task::done(Message::SubmitUnlockPassphrase))
+            }
+            Some(AuthDialog::SetupPassphrase { is_processing, .. }) if !*is_processing => {
+                Some(Task::done(Message::SubmitSetupPassphrase))
+            }
+            Some(_) => Some(Task::none()),
+            None => None,
+        },
         Message::DismissAuthDialog => {
             state.active_dialog = None;
             Some(Task::none())
@@ -362,11 +404,13 @@ fn view_setup_passphrase<'a>(
                 color: Some(t.palette().text.scale_alpha(0.7)),
             }),
             text_input("Enter passphrase", passphrase_input)
+                .id(setup_passphrase_id())
                 .on_input_maybe((!is_processing).then_some(Message::AuthSetupPassphraseChanged))
                 .secure(true)
                 .padding([12, 16])
                 .style(crate::theme::m3_text_input),
             text_input("Confirm passphrase", confirm_input)
+                .id(setup_confirm_id())
                 .on_input_maybe((!is_processing).then_some(Message::AuthSetupConfirmChanged))
                 .secure(true)
                 .padding([12, 16])
@@ -455,6 +499,7 @@ fn view_unlock<'a>(
                     color: Some(t.palette().text.scale_alpha(0.7)),
                 }),
             text_input("Master passphrase", passphrase_input)
+                .id(unlock_input_id())
                 .on_input_maybe((!is_processing).then_some(Message::AuthUnlockPassphraseChanged))
                 .secure(true)
                 .padding([12, 16])
@@ -924,5 +969,160 @@ mod tests {
         let mut state = make_state();
         let result = handle_message(&mut state, &Message::Noop);
         assert!(result.is_none(), "non-auth messages must not be consumed");
+    }
+
+    // ── AuthTabKeyPressed ─────────────────────────────────────────────────────
+
+    /// Tab with no active dialog is not consumed (returns None).
+    #[test]
+    fn auth_tab_not_consumed_when_no_dialog() {
+        let mut state = make_state();
+        let result = handle_message(&mut state, &Message::AuthTabKeyPressed { shift: false });
+        assert!(result.is_none(), "no dialog → message must not be consumed");
+    }
+
+    /// Tab with Unlock dialog is consumed but is a no-op (single input field).
+    #[test]
+    fn auth_tab_noop_in_unlock_dialog() {
+        let mut state = make_state();
+        state.active_dialog = Some(unlock_dialog());
+        let result = handle_message(&mut state, &Message::AuthTabKeyPressed { shift: false });
+        assert!(result.is_some(), "Unlock → must be consumed");
+        // Dialog itself must be untouched.
+        assert!(
+            matches!(state.active_dialog, Some(AuthDialog::Unlock { .. })),
+            "dialog must not be cleared"
+        );
+    }
+
+    /// Shift-Tab with Unlock dialog is also consumed as a no-op.
+    #[test]
+    fn auth_shift_tab_noop_in_unlock_dialog() {
+        let mut state = make_state();
+        state.active_dialog = Some(unlock_dialog());
+        let result = handle_message(&mut state, &Message::AuthTabKeyPressed { shift: true });
+        assert!(result.is_some());
+    }
+
+    /// Tab with Setup dialog is consumed (two-input ring — returns a focus task).
+    #[test]
+    fn auth_tab_active_in_setup_dialog() {
+        let mut state = make_state();
+        state.active_dialog = Some(setup_dialog(Uuid::new_v4()));
+        let result = handle_message(&mut state, &Message::AuthTabKeyPressed { shift: false });
+        assert!(result.is_some(), "Setup → must be consumed");
+        // Dialog must still be open.
+        assert!(
+            matches!(
+                state.active_dialog,
+                Some(AuthDialog::SetupPassphrase { .. })
+            ),
+            "dialog must remain open"
+        );
+    }
+
+    /// Shift-Tab with Setup dialog is also consumed.
+    #[test]
+    fn auth_shift_tab_active_in_setup_dialog() {
+        let mut state = make_state();
+        state.active_dialog = Some(setup_dialog(Uuid::new_v4()));
+        let result = handle_message(&mut state, &Message::AuthTabKeyPressed { shift: true });
+        assert!(result.is_some());
+    }
+
+    // ── AuthEnterPressed ──────────────────────────────────────────────────────
+
+    /// Enter with no dialog is not consumed.
+    #[test]
+    fn auth_enter_not_consumed_when_no_dialog() {
+        let mut state = make_state();
+        let result = handle_message(&mut state, &Message::AuthEnterPressed);
+        assert!(result.is_none());
+    }
+
+    /// Enter in Unlock dialog while not processing dispatches the submit task.
+    #[test]
+    fn auth_enter_dispatches_unlock_submit_when_ready() {
+        let mut state = make_state();
+        state.active_dialog = Some(unlock_dialog());
+        let result = handle_message(&mut state, &Message::AuthEnterPressed);
+        assert!(result.is_some(), "must be consumed");
+        // Not yet processing — the submit task is returned, no state mutation yet.
+        assert!(
+            matches!(
+                state.active_dialog,
+                Some(AuthDialog::Unlock {
+                    is_processing: false,
+                    ..
+                })
+            ),
+            "is_processing must not flip before task executes"
+        );
+    }
+
+    /// Enter in Unlock dialog while processing is ignored (prevents double-submit).
+    #[test]
+    fn auth_enter_noop_in_unlock_while_processing() {
+        let mut state = make_state();
+        state.active_dialog = Some(AuthDialog::Unlock {
+            pending_action: PendingAction::ConnectToProfile(Uuid::new_v4()),
+            passphrase_input: "x".to_owned(),
+            error: None,
+            is_processing: true,
+        });
+        let result = handle_message(&mut state, &Message::AuthEnterPressed);
+        assert!(result.is_some(), "still consumed");
+        assert!(
+            matches!(
+                state.active_dialog,
+                Some(AuthDialog::Unlock {
+                    is_processing: true,
+                    ..
+                })
+            ),
+            "is_processing must not be reset"
+        );
+    }
+
+    /// Enter in Setup dialog while not processing dispatches the submit task.
+    #[test]
+    fn auth_enter_dispatches_setup_submit_when_ready() {
+        let mut state = make_state();
+        state.active_dialog = Some(setup_dialog(Uuid::new_v4()));
+        let result = handle_message(&mut state, &Message::AuthEnterPressed);
+        assert!(result.is_some());
+        assert!(
+            matches!(
+                state.active_dialog,
+                Some(AuthDialog::SetupPassphrase { .. })
+            ),
+            "dialog must remain open until async task completes"
+        );
+    }
+
+    /// Enter in Setup dialog while processing is ignored.
+    #[test]
+    fn auth_enter_noop_in_setup_while_processing() {
+        let mut state = make_state();
+        state.active_dialog = Some(AuthDialog::SetupPassphrase {
+            pending_profile_id: Uuid::new_v4(),
+            pending_password: "pw".to_owned(),
+            passphrase_input: "good".to_owned(),
+            confirm_input: "good".to_owned(),
+            error: None,
+            is_processing: true,
+        });
+        let result = handle_message(&mut state, &Message::AuthEnterPressed);
+        assert!(result.is_some());
+        assert!(
+            matches!(
+                state.active_dialog,
+                Some(AuthDialog::SetupPassphrase {
+                    is_processing: true,
+                    ..
+                })
+            ),
+            "is_processing must not be reset"
+        );
     }
 }

@@ -21,7 +21,7 @@ use crate::profile::ThemeConfig;
 
 use super::draft::TestResult;
 use super::state::SettingsScreen;
-use super::{Message, SettingsTab};
+use super::{Message, SettingsTab, prof_ring_id};
 
 impl SettingsScreen {
     pub fn view(&self) -> Element<'_, Message> {
@@ -452,6 +452,7 @@ impl SettingsScreen {
             row![
                 text("Profile Name").width(120),
                 text_input("Name", &draft.name)
+                    .id(prof_ring_id(0))
                     .on_input(Message::DraftNameChanged)
                     .padding([12, 16])
                     .style(crate::theme::m3_text_input)
@@ -461,6 +462,7 @@ impl SettingsScreen {
             row![
                 text("Host").width(120),
                 text_input("localhost", &draft.host)
+                    .id(prof_ring_id(1))
                     .on_input(Message::DraftHostChanged)
                     .padding([12, 16])
                     .style(crate::theme::m3_text_input)
@@ -470,6 +472,7 @@ impl SettingsScreen {
             row![
                 text("Port").width(120),
                 text_input("9091", &draft.port)
+                    .id(prof_ring_id(2))
                     .on_input(Message::DraftPortChanged)
                     .width(100)
                     .padding([12, 16])
@@ -480,6 +483,7 @@ impl SettingsScreen {
             row![
                 text("Username").width(120),
                 text_input("optional", &draft.username)
+                    .id(prof_ring_id(3))
                     .on_input(Message::DraftUsernameChanged)
                     .padding([12, 16])
                     .style(crate::theme::m3_text_input)
@@ -496,6 +500,7 @@ impl SettingsScreen {
                     },
                     &draft.password
                 )
+                .id(prof_ring_id(4))
                 .on_input(Message::DraftPasswordChanged)
                 .secure(true)
                 .padding([12, 16])

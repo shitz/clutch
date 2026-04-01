@@ -348,6 +348,25 @@ impl SettingsScreen {
                 self.confirm_discard = None;
                 (Task::none(), None)
             }
+
+            // ── Keyboard ─────────────────────────────────────────────────
+            Message::TabKeyPressed { shift } => {
+                // Only active in the Connections tab when a profile is being edited.
+                if self.active_tab != super::SettingsTab::Connections || self.draft.is_none() {
+                    return (Task::none(), None);
+                }
+                // Use iced's built-in focus cycling so Tab after a mouse click
+                // continues from the field the user actually clicked into.
+                let task = if shift {
+                    iced::widget::operation::focus_previous()
+                } else {
+                    iced::widget::operation::focus_next()
+                };
+                (task, None)
+            }
+
+            // Enter has no primary action in the settings screen (non-goal).
+            Message::EnterPressed => (Task::none(), None),
         }
     }
 }

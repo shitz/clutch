@@ -17,7 +17,7 @@ use iced::Task;
 
 use crate::rpc::{AddPayload, RpcWork};
 
-use super::add_dialog::{AddDialogState, FileReadResult, TorrentFileInfo};
+use super::add_dialog::{self, AddDialogState, FileReadResult, TorrentFileInfo};
 use super::sort::SortDir;
 use super::{Message, TorrentListScreen};
 
@@ -186,7 +186,7 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
                 destination: String::new(),
                 error: None,
             };
-            Task::none()
+            iced::widget::operation::focus(add_dialog::add_destination_id())
         }
 
         Message::TorrentFileRead(Err(err)) => {
@@ -203,7 +203,7 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
                 destination: String::new(),
                 error: None,
             };
-            Task::none()
+            iced::widget::operation::focus(add_dialog::add_magnet_id())
         }
 
         Message::AddDialogMagnetChanged(val) => {
@@ -283,6 +283,34 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
 
         // Disconnect / OpenSettingsClicked are intercepted by the parent.
         Message::Disconnect | Message::OpenSettingsClicked => Task::none(),
+
+        // ── Add-dialog keyboard ───────────────────────────────────────────────
+        Message::DialogTabKeyPressed { shift } => match &state.add_dialog {
+            AddDialogState::AddLink { .. } => {
+                // Use iced's built-in focus cycling so clicking a field and
+                // then pressing Tab continues from the right place.
+                if shift {
+                    iced::widget::operation::focus_previous()
+                } else {
+                    iced::widget::operation::focus_next()
+                }
+            }
+            // File mode has only one text input — Tab is a no-op.
+            _ => Task::none(),
+        },
+
+        Message::DialogEnterPressed => {
+            let should_confirm = match &state.add_dialog {
+                AddDialogState::AddLink { magnet, .. } => !magnet.trim().is_empty(),
+                AddDialogState::AddFile { metainfo_b64, .. } => !metainfo_b64.is_empty(),
+                AddDialogState::Hidden => false,
+            };
+            if should_confirm {
+                update(state, Message::AddConfirmed)
+            } else {
+                Task::none()
+            }
+        }
 
         // ── Column sort ───────────────────────────────────────────────────────
         Message::ColumnHeaderClicked(col) => {

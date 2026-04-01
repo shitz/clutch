@@ -17,6 +17,18 @@ use iced::{Element, Length};
 
 use super::Message;
 
+// ── Focus IDs ─────────────────────────────────────────────────────────────────
+
+/// Stable widget ID for the magnet URI field.
+pub fn add_magnet_id() -> iced::widget::Id {
+    iced::widget::Id::new("add_magnet")
+}
+
+/// Stable widget ID for the destination folder field.
+pub fn add_destination_id() -> iced::widget::Id {
+    iced::widget::Id::new("add_destination")
+}
+
 /// A single file entry parsed from a `.torrent` file, shown in the add dialog.
 #[derive(Debug, Clone)]
 pub struct TorrentFileInfo {
@@ -74,11 +86,13 @@ pub fn view_add_dialog(state: &AddDialogState) -> Element<'_, Message> {
             let input: Element<Message> = column![
                 text("Magnet link"),
                 text_input("magnet:?xt=…", magnet)
+                    .id(add_magnet_id())
                     .on_input(Message::AddDialogMagnetChanged)
                     .padding([12, 16])
                     .style(crate::theme::m3_text_input),
                 text("Destination folder (leave empty for default)"),
                 text_input("/path/to/downloads", destination)
+                    .id(add_destination_id())
                     .on_input(Message::AddDialogDestinationChanged)
                     .padding([12, 16])
                     .style(crate::theme::m3_text_input),
@@ -117,6 +131,7 @@ pub fn view_add_dialog(state: &AddDialogState) -> Element<'_, Message> {
             let input: Element<Message> = column![
                 text("Destination folder (leave empty for default)"),
                 text_input("/path/to/downloads", destination)
+                    .id(add_destination_id())
                     .on_input(Message::AddDialogDestinationChanged)
                     .padding([12, 16])
                     .style(crate::theme::m3_text_input),

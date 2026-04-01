@@ -40,6 +40,8 @@ pub use update::update;
 pub use view::view;
 pub use worker::rpc_worker_stream;
 
+use iced::Subscription;
+
 // ── Message ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -75,6 +77,13 @@ pub enum Message {
     OpenSettingsClicked,
     // Column sort
     ColumnHeaderClicked(SortColumn),
+    // Keyboard
+    /// Tab key pressed while the add-torrent dialog is open.
+    DialogTabKeyPressed {
+        shift: bool,
+    },
+    /// Enter key pressed while the add-torrent dialog is open.
+    DialogEnterPressed,
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -132,6 +141,32 @@ impl TorrentListScreen {
 
     pub(crate) fn enqueue_torrent_get(&self) {
         self.enqueue(RpcWork::TorrentGet(self.params.clone()));
+    }
+
+    /// Keyboard subscription for the add-torrent dialog.
+    ///
+    /// Only active while the dialog is open — returns `Subscription::none()` when
+    /// `add_dialog` is `Hidden` so Tab and Enter are not captured on the main list.
+    pub fn dialog_subscription(&self) -> Subscription<Message> {
+        if matches!(self.add_dialog, AddDialogState::Hidden) {
+            return Subscription::none();
+        }
+        iced::keyboard::listen().filter_map(|event| {
+            use iced::keyboard::{Event, Key, key::Named};
+            if let Event::KeyPressed { key, modifiers, .. } = event {
+                match key.as_ref() {
+                    Key::Named(Named::Tab) => Some(Message::DialogTabKeyPressed {
+                        shift: modifiers.shift(),
+                    }),
+                    Key::Named(Named::Enter) if !modifiers.control() && !modifiers.alt() => {
+                        Some(Message::DialogEnterPressed)
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -473,5 +508,126 @@ mod tests {
         let _ = update(&mut screen, Message::ColumnHeaderClicked(SortColumn::Size));
         assert_eq!(screen.sort_column, Some(SortColumn::Size));
         assert_eq!(screen.sort_dir, SortDir::Asc);
+    }
+
+    // ── DialogTabKeyPressed guards ────────────────────────────────────────────
+
+    /// Tab is a no-op when the dialog is hidden.
+    #[test]
+    fn dialog_tab_noop_when_hidden() {
+        let mut screen = make_screen();
+        assert!(matches!(screen.add_dialog, AddDialogState::Hidden));
+        let _ = update(&mut screen, Message::DialogTabKeyPressed { shift: false });
+        // State must be unchanged.
+        assert!(matches!(screen.add_dialog, AddDialogState::Hidden));
+    }
+
+    /// Tab is a no-op in AddFile mode (only one text input — destination).
+    #[test]
+    fn dialog_tab_noop_in_add_file_mode() {
+        let mut screen = make_screen();
+        screen.add_dialog = AddDialogState::AddFile {
+            metainfo_b64: "dGVzdA==".to_owned(),
+            files: vec![],
+            destination: "/downloads".to_owned(),
+            error: None,
+        };
+        let _ = update(&mut screen, Message::DialogTabKeyPressed { shift: false });
+        // Dialog state must be unchanged.
+        assert!(matches!(screen.add_dialog, AddDialogState::AddFile { .. }));
+    }
+
+    /// Tab in AddLink mode returns a focus task (no state mutation, no error).
+    #[test]
+    fn dialog_tab_active_in_add_link_mode() {
+        let mut screen = make_screen();
+        screen.add_dialog = AddDialogState::AddLink {
+            magnet: String::new(),
+            destination: String::new(),
+            error: None,
+        };
+        // Forward Tab.
+        let _ = update(&mut screen, Message::DialogTabKeyPressed { shift: false });
+        // Dialog must still be open — no state change on any field.
+        assert!(matches!(screen.add_dialog, AddDialogState::AddLink { .. }));
+    }
+
+    /// Shift-Tab in AddLink mode also returns a focus task.
+    #[test]
+    fn dialog_shift_tab_active_in_add_link_mode() {
+        let mut screen = make_screen();
+        screen.add_dialog = AddDialogState::AddLink {
+            magnet: String::new(),
+            destination: String::new(),
+            error: None,
+        };
+        let _ = update(&mut screen, Message::DialogTabKeyPressed { shift: true });
+        assert!(matches!(screen.add_dialog, AddDialogState::AddLink { .. }));
+    }
+
+    // ── DialogEnterPressed guards ─────────────────────────────────────────────
+
+    /// Enter with an empty magnet is a no-op (does not set is_loading).
+    #[test]
+    fn dialog_enter_noop_with_empty_magnet() {
+        let mut screen = make_screen();
+        screen.add_dialog = AddDialogState::AddLink {
+            magnet: String::new(),
+            destination: String::new(),
+            error: None,
+        };
+        let _ = update(&mut screen, Message::DialogEnterPressed);
+        assert!(!screen.is_loading, "empty magnet must not trigger submit");
+    }
+
+    /// Enter with whitespace-only magnet is also a no-op.
+    #[test]
+    fn dialog_enter_noop_with_whitespace_magnet() {
+        let mut screen = make_screen();
+        screen.add_dialog = AddDialogState::AddLink {
+            magnet: "   ".to_owned(),
+            destination: String::new(),
+            error: None,
+        };
+        let _ = update(&mut screen, Message::DialogEnterPressed);
+        assert!(!screen.is_loading);
+    }
+
+    /// Enter with a non-empty magnet triggers submit (sets is_loading).
+    #[test]
+    fn dialog_enter_submits_with_valid_magnet() {
+        let mut screen = make_screen();
+        screen.add_dialog = AddDialogState::AddLink {
+            magnet: "magnet:?xt=urn:btih:abc123".to_owned(),
+            destination: String::new(),
+            error: None,
+        };
+        let _ = update(&mut screen, Message::DialogEnterPressed);
+        assert!(screen.is_loading, "valid magnet must trigger submit");
+    }
+
+    /// Enter with an AddFile dialog (metainfo present) triggers submit.
+    #[test]
+    fn dialog_enter_submits_with_add_file() {
+        let mut screen = make_screen();
+        screen.add_dialog = AddDialogState::AddFile {
+            metainfo_b64: "dGVzdA==".to_owned(),
+            files: vec![],
+            destination: "/downloads".to_owned(),
+            error: None,
+        };
+        let _ = update(&mut screen, Message::DialogEnterPressed);
+        assert!(
+            screen.is_loading,
+            "AddFile with metainfo must trigger submit"
+        );
+    }
+
+    /// Enter when the dialog is Hidden is a no-op.
+    #[test]
+    fn dialog_enter_noop_when_hidden() {
+        let mut screen = make_screen();
+        let _ = update(&mut screen, Message::DialogEnterPressed);
+        assert!(!screen.is_loading);
     }
 }

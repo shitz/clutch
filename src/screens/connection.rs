@@ -73,10 +73,48 @@ pub enum Message {
     ManageProfilesClicked,
     /// Initiate a probe using pre-built credentials (set by app-level intercept).
     /// Bypasses credential lookup in the connection screen.
-    ConnectWithCreds { profile_id: Uuid, creds: TransmissionCredentials },
+    ConnectWithCreds {
+        profile_id: Uuid,
+        creds: TransmissionCredentials,
+    },
+    /// Tab / Shift-Tab key pressed while the Quick Connect form is active.
+    TabKeyPressed {
+        shift: bool,
+    },
+    /// Enter key pressed while the Quick Connect form is active.
+    EnterPressed,
 }
 
-// ── State ─────────────────────────────────────────────────────────────────────
+// ── State ───────────────────────────────────────────────────────────────────
+
+// ── Quick Connect auto-focus ────────────────────────────────────────────────
+
+/// Returns the stable widget ID for position `index` in the Quick Connect form
+/// (0=Host, 1=Port, 2=Username, 3=Password). Used only for initial auto-focus.
+fn qc_ring_id(index: usize) -> iced::widget::Id {
+    match index {
+        0 => iced::widget::Id::new("qc_host"),
+        1 => iced::widget::Id::new("qc_port"),
+        2 => iced::widget::Id::new("qc_username"),
+        _ => iced::widget::Id::new("qc_password"),
+    }
+}
+
+/// Returns the QC form field index that should receive initial auto-focus
+/// (first empty field, falling back to Host).
+fn qc_auto_focus_index(s: &ConnectionScreen) -> usize {
+    if s.qc_host.is_empty() {
+        0
+    } else if s.qc_port.is_empty() {
+        1
+    } else if s.qc_username.is_empty() {
+        2
+    } else if s.qc_password.is_empty() {
+        3
+    } else {
+        0
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ConnectionScreen {
@@ -131,6 +169,15 @@ impl ConnectionScreen {
             connecting_creds: None,
             logo_handle: iced::widget::image::Handle::from_bytes(crate::theme::LOGO_BYTES),
             error: None,
+        }
+    }
+
+    /// Returns a `Task` that auto-focuses the first empty Quick Connect field.
+    pub fn initial_focus_task(&self) -> Task<Message> {
+        if self.tab == ConnectionTab::QuickConnect {
+            iced::widget::operation::focus(qc_ring_id(qc_auto_focus_index(self)))
+        } else {
+            Task::none()
         }
     }
 
@@ -383,18 +430,22 @@ impl ConnectionScreen {
 
         column![
             text_input("Host", &self.qc_host)
+                .id(iced::widget::Id::new("qc_host"))
                 .on_input(Message::HostChanged)
                 .padding([12, 16])
                 .style(crate::theme::m3_text_input),
             text_input("Port", &self.qc_port)
+                .id(iced::widget::Id::new("qc_port"))
                 .on_input(Message::PortChanged)
                 .padding([12, 16])
                 .style(crate::theme::m3_text_input),
             text_input("Username (optional)", &self.qc_username)
+                .id(iced::widget::Id::new("qc_username"))
                 .on_input(Message::UsernameChanged)
                 .padding([12, 16])
                 .style(crate::theme::m3_text_input),
             text_input("Password (optional)", &self.qc_password)
+                .id(iced::widget::Id::new("qc_password"))
                 .on_input(Message::PasswordChanged)
                 .padding([12, 16])
                 .style(crate::theme::m3_text_input)
@@ -417,7 +468,14 @@ impl ConnectionScreen {
             Message::TabSelected(tab) => {
                 self.tab = tab;
                 self.error = None;
-                (Task::none(), None)
+                // Auto-focus first empty QC field when switching to Quick Connect.
+                if tab == ConnectionTab::QuickConnect {
+                    let task =
+                        iced::widget::operation::focus(qc_ring_id(qc_auto_focus_index(self)));
+                    (task, None)
+                } else {
+                    (Task::none(), None)
+                }
             }
 
             // ── Saved profile selection ──────────────────────────────────────
@@ -532,6 +590,53 @@ impl ConnectionScreen {
                 // Intercepted by app::update before reaching this screen.
                 (Task::none(), None)
             }
+
+            // ── Keyboard ───────────────────────────────────────────────
+            Message::TabKeyPressed { shift } => match self.tab {
+                ConnectionTab::QuickConnect => {
+                    // Delegate to iced's built-in focus cycling so that
+                    // clicking a field (which updates iced's internal focus
+                    // state) is automatically taken into account.
+                    let task = if shift {
+                        iced::widget::operation::focus_previous()
+                    } else {
+                        iced::widget::operation::focus_next()
+                    };
+                    (task, None)
+                }
+                ConnectionTab::SavedProfiles => {
+                    // Cycle through the profile list.
+                    if self.profiles.is_empty() {
+                        return (Task::none(), None);
+                    }
+                    let current = self
+                        .selected_profile_id
+                        .and_then(|id| self.profiles.iter().position(|p| p.id == id))
+                        .unwrap_or(0);
+                    let next = if shift {
+                        (current + self.profiles.len() - 1) % self.profiles.len()
+                    } else {
+                        (current + 1) % self.profiles.len()
+                    };
+                    self.selected_profile_id = Some(self.profiles[next].id);
+                    (Task::none(), None)
+                }
+            },
+
+            Message::EnterPressed => match self.tab {
+                ConnectionTab::QuickConnect if !self.is_connecting => {
+                    self.update(Message::ConnectClicked)
+                }
+                ConnectionTab::SavedProfiles if !self.is_connecting => {
+                    if let Some(id) = self.selected_profile_id {
+                        // Reuse the same intercept path as a mouse click on Connect.
+                        (Task::done(Message::ConnectProfile(id)), None)
+                    } else {
+                        (Task::none(), None)
+                    }
+                }
+                _ => (Task::none(), None),
+            },
         }
     }
 }
@@ -598,5 +703,191 @@ mod tests {
         let _ = s.update(Message::TabSelected(ConnectionTab::SavedProfiles));
         assert!(s.error.is_none());
         assert_eq!(s.tab, ConnectionTab::SavedProfiles);
+    }
+
+    // ── Saved Profiles Tab cycling ────────────────────────────────────────────
+
+    fn make_profiles(n: usize) -> Vec<ConnectionProfile> {
+        (0..n).map(|_| ConnectionProfile::new_blank()).collect()
+    }
+
+    /// Tab with no profiles is a no-op (no panic, selection stays None).
+    #[test]
+    fn saved_tab_forward_empty_profiles_is_noop() {
+        let mut s = ConnectionScreen::new_launchpad(&[]);
+        s.tab = ConnectionTab::SavedProfiles;
+        s.selected_profile_id = None;
+        let _ = s.update(Message::TabKeyPressed { shift: false });
+        assert_eq!(s.selected_profile_id, None);
+    }
+
+    /// Tab on a single profile leaves the selection unchanged (wraps to itself).
+    #[test]
+    fn saved_tab_single_profile_stays_selected() {
+        let profiles = make_profiles(1);
+        let id = profiles[0].id;
+        let mut s = ConnectionScreen::new_launchpad(&profiles);
+        assert_eq!(s.selected_profile_id, Some(id));
+        let _ = s.update(Message::TabKeyPressed { shift: false });
+        assert_eq!(s.selected_profile_id, Some(id));
+    }
+
+    /// Shift-Tab on a single profile also stays on the same profile.
+    #[test]
+    fn saved_tab_single_profile_shift_stays_selected() {
+        let profiles = make_profiles(1);
+        let id = profiles[0].id;
+        let mut s = ConnectionScreen::new_launchpad(&profiles);
+        let _ = s.update(Message::TabKeyPressed { shift: true });
+        assert_eq!(s.selected_profile_id, Some(id));
+    }
+
+    /// Tab moves forward through the list.
+    #[test]
+    fn saved_tab_forward_advances_selection() {
+        let profiles = make_profiles(3);
+        let ids: Vec<_> = profiles.iter().map(|p| p.id).collect();
+        let mut s = ConnectionScreen::new_launchpad(&profiles);
+        // Starts at index 0.
+        assert_eq!(s.selected_profile_id, Some(ids[0]));
+        let _ = s.update(Message::TabKeyPressed { shift: false });
+        assert_eq!(s.selected_profile_id, Some(ids[1]));
+        let _ = s.update(Message::TabKeyPressed { shift: false });
+        assert_eq!(s.selected_profile_id, Some(ids[2]));
+    }
+
+    /// Tab wraps from the last entry back to the first.
+    #[test]
+    fn saved_tab_forward_wraps_at_end() {
+        let profiles = make_profiles(2);
+        let ids: Vec<_> = profiles.iter().map(|p| p.id).collect();
+        let mut s = ConnectionScreen::new_launchpad(&profiles);
+        s.selected_profile_id = Some(ids[1]); // start at last
+        let _ = s.update(Message::TabKeyPressed { shift: false });
+        assert_eq!(s.selected_profile_id, Some(ids[0]));
+    }
+
+    /// Shift-Tab moves backward through the list.
+    #[test]
+    fn saved_tab_backward_retreats_selection() {
+        let profiles = make_profiles(3);
+        let ids: Vec<_> = profiles.iter().map(|p| p.id).collect();
+        let mut s = ConnectionScreen::new_launchpad(&profiles);
+        s.selected_profile_id = Some(ids[2]); // start at last
+        let _ = s.update(Message::TabKeyPressed { shift: true });
+        assert_eq!(s.selected_profile_id, Some(ids[1]));
+        let _ = s.update(Message::TabKeyPressed { shift: true });
+        assert_eq!(s.selected_profile_id, Some(ids[0]));
+    }
+
+    /// Shift-Tab wraps from the first entry back to the last.
+    #[test]
+    fn saved_tab_backward_wraps_at_start() {
+        let profiles = make_profiles(3);
+        let ids: Vec<_> = profiles.iter().map(|p| p.id).collect();
+        let mut s = ConnectionScreen::new_launchpad(&profiles);
+        s.selected_profile_id = Some(ids[0]); // start at first
+        let _ = s.update(Message::TabKeyPressed { shift: true });
+        assert_eq!(s.selected_profile_id, Some(ids[2]));
+    }
+
+    /// When `selected_profile_id` is None, Tab treats the current position as
+    /// index 0 and advances to index 1 (the second profile).
+    #[test]
+    fn saved_tab_none_selection_treated_as_index_zero() {
+        let profiles = make_profiles(3);
+        let ids: Vec<_> = profiles.iter().map(|p| p.id).collect();
+        let mut s = ConnectionScreen::new_launchpad(&profiles);
+        s.selected_profile_id = None;
+        let _ = s.update(Message::TabKeyPressed { shift: false });
+        assert_eq!(s.selected_profile_id, Some(ids[1]));
+    }
+
+    // ── EnterPressed on Saved Profiles ────────────────────────────────────────
+
+    /// Enter with a selection and not connecting yields ConnectProfile (no
+    /// ConnectSuccess yet — the app intercepts the message).
+    #[test]
+    fn enter_saved_profiles_with_selection_no_success_yet() {
+        let profiles = make_profiles(2);
+        let mut s = ConnectionScreen::new_launchpad(&profiles);
+        let (_, result) = s.update(Message::EnterPressed);
+        // ConnectProfile is dispatched as a Task::done message; the screen
+        // does not return a ConnectSuccess directly.
+        assert!(result.is_none());
+        // State must not flip is_connecting on its own.
+        assert!(!s.is_connecting);
+    }
+
+    /// Enter with no selection does nothing.
+    #[test]
+    fn enter_saved_profiles_no_selection_is_noop() {
+        let profiles = make_profiles(2);
+        let mut s = ConnectionScreen::new_launchpad(&profiles);
+        s.selected_profile_id = None;
+        let (_, result) = s.update(Message::EnterPressed);
+        assert!(result.is_none());
+        assert!(!s.is_connecting);
+    }
+
+    /// Enter is ignored while a connection probe is already in-flight.
+    #[test]
+    fn enter_saved_profiles_ignored_while_connecting() {
+        let profiles = make_profiles(1);
+        let mut s = ConnectionScreen::new_launchpad(&profiles);
+        s.is_connecting = true;
+        let (_, result) = s.update(Message::EnterPressed);
+        assert!(result.is_none());
+        // is_connecting must not be changed
+        assert!(s.is_connecting);
+    }
+
+    // ── qc_auto_focus_index ───────────────────────────────────────────────────
+
+    fn qc_screen_with(host: &str, port: &str, username: &str, password: &str) -> ConnectionScreen {
+        let mut s = blank();
+        s.qc_host = host.to_owned();
+        s.qc_port = port.to_owned();
+        s.qc_username = username.to_owned();
+        s.qc_password = password.to_owned();
+        s
+    }
+
+    #[test]
+    fn auto_focus_selects_host_when_empty() {
+        let s = qc_screen_with("", "9091", "user", "pass");
+        assert_eq!(qc_auto_focus_index(&s), 0);
+    }
+
+    #[test]
+    fn auto_focus_selects_port_when_empty() {
+        let s = qc_screen_with("localhost", "", "user", "pass");
+        assert_eq!(qc_auto_focus_index(&s), 1);
+    }
+
+    #[test]
+    fn auto_focus_selects_username_when_empty() {
+        let s = qc_screen_with("localhost", "9091", "", "pass");
+        assert_eq!(qc_auto_focus_index(&s), 2);
+    }
+
+    #[test]
+    fn auto_focus_selects_password_when_empty() {
+        let s = qc_screen_with("localhost", "9091", "user", "");
+        assert_eq!(qc_auto_focus_index(&s), 3);
+    }
+
+    #[test]
+    fn auto_focus_falls_back_to_host_when_all_filled() {
+        let s = qc_screen_with("localhost", "9091", "user", "hunter2");
+        assert_eq!(qc_auto_focus_index(&s), 0);
+    }
+
+    /// Priority: the *first* empty field wins, left-to-right.
+    #[test]
+    fn auto_focus_priority_is_left_to_right() {
+        // host empty AND username empty → host (index 0) wins
+        let s = qc_screen_with("", "9091", "", "pass");
+        assert_eq!(qc_auto_focus_index(&s), 0);
     }
 }

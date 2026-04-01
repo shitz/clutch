@@ -231,9 +231,10 @@ impl ProfileStore {
         // and only sets `encrypted_password = None` when explicitly cleared).
         for profile in &mut self.profiles {
             if profile.encrypted_password.is_none()
-                && let Some(src) = from.get(profile.id) {
-                    profile.encrypted_password = src.encrypted_password.clone();
-                }
+                && let Some(src) = from.get(profile.id)
+            {
+                profile.encrypted_password = src.encrypted_password.clone();
+            }
         }
     }
 }

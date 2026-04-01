@@ -85,6 +85,12 @@ pub enum Message {
     SubmitSetupPassphrase,
     SubmitUnlockPassphrase,
     DismissAuthDialog,
+    /// Tab pressed while an auth dialog is active — cycles within the dialog.
+    AuthTabKeyPressed {
+        shift: bool,
+    },
+    /// Enter pressed while an auth dialog is active — triggers primary CTA.
+    AuthEnterPressed,
     /// Returned when the async passphrase hash + encryption task completes.
     SetupPassphraseComplete {
         passphrase: String,
@@ -214,8 +220,10 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
         // save fired ProfilesLoaded after a successful connect) we must not
         // navigate away.
         if matches!(state.screen, Screen::Connection(_)) {
-            state.screen =
-                Screen::Connection(ConnectionScreen::new_launchpad(&state.profiles.profiles));
+            let conn = ConnectionScreen::new_launchpad(&state.profiles.profiles);
+            let focus = conn.initial_focus_task().map(Message::Connection);
+            state.screen = Screen::Connection(conn);
+            return focus;
         }
         return Task::none();
     }
@@ -226,7 +234,10 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 let id = state.profiles.last_connected.expect("set before probe");
                 let profile = state.profiles.get(id).expect("profile must exist");
                 let creds = profile.credentials(
-                    state.unlocked_passphrase.as_ref().map(|s| s.expose_secret().as_str()),
+                    state
+                        .unlocked_passphrase
+                        .as_ref()
+                        .map(|s| s.expose_secret().as_str()),
                 );
                 let sid = info.session_id.clone();
                 let profile_name = profile.name.clone();
@@ -241,8 +252,10 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
             }
             Err(err) => {
                 tracing::warn!(error = %err, "Auto-connect failed; showing connection launchpad");
-                state.screen =
-                    Screen::Connection(ConnectionScreen::new_launchpad(&state.profiles.profiles));
+                let conn = ConnectionScreen::new_launchpad(&state.profiles.profiles);
+                let focus = conn.initial_focus_task().map(Message::Connection);
+                state.screen = Screen::Connection(conn);
+                return focus;
             }
         }
         return Task::none();
@@ -254,9 +267,10 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
         Message::Main(main_screen::Message::Disconnect) => {
             tracing::info!("Disconnecting; returning to connection launchpad");
             state.active_profile = None;
-            state.screen =
-                Screen::Connection(ConnectionScreen::new_launchpad(&state.profiles.profiles));
-            return Task::none();
+            let conn = ConnectionScreen::new_launchpad(&state.profiles.profiles);
+            let focus = conn.initial_focus_task().map(Message::Connection);
+            state.screen = Screen::Connection(conn);
+            return focus;
         }
         Message::Main(main_screen::Message::OpenSettingsClicked) => {
             open_settings(state, SettingsTab::General);
@@ -280,11 +294,14 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error: None,
                     is_processing: false,
                 });
-                return Task::none();
+                return iced::widget::operation::focus(crate::auth::unlock_input_id());
             }
             // Passphrase available (or no password required) — build creds and connect.
             let creds = profile.credentials(
-                state.unlocked_passphrase.as_ref().map(|s| s.expose_secret().as_str()),
+                state
+                    .unlocked_passphrase
+                    .as_ref()
+                    .map(|s| s.expose_secret().as_str()),
             );
             return Task::done(Message::Connection(connection::Message::ConnectWithCreds {
                 profile_id: id,
@@ -428,8 +445,12 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 if let Some(id) = state.active_profile
                                     && let Some(profile) = state.profiles.get(id)
                                 {
-                                    let creds =
-                                        profile.credentials(state.unlocked_passphrase.as_ref().map(|s| s.expose_secret().as_str()));
+                                    let creds = profile.credentials(
+                                        state
+                                            .unlocked_passphrase
+                                            .as_ref()
+                                            .map(|s| s.expose_secret().as_str()),
+                                    );
                                     state.screen = Screen::Main(MainScreen::new_with_label(
                                         creds,
                                         String::new(),
@@ -440,9 +461,11 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                     return Task::none();
                                 }
                                 state.active_profile = None;
-                                state.screen = Screen::Connection(ConnectionScreen::new_launchpad(
-                                    &state.profiles.profiles,
-                                ));
+                                let conn =
+                                    ConnectionScreen::new_launchpad(&state.profiles.profiles);
+                                let focus = conn.initial_focus_task().map(Message::Connection);
+                                state.screen = Screen::Connection(conn);
+                                return focus;
                             }
                             settings::SettingsResult::SaveWithPassword {
                                 profile_id,
@@ -453,15 +476,19 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 state.profiles = store;
                                 match &state.profiles.master_passphrase_hash {
                                     None => {
-                                        state.active_dialog =
-                                            Some(AuthDialog::SetupPassphrase {
-                                                pending_profile_id: profile_id,
-                                                pending_password: password,
-                                                passphrase_input: String::new(),
-                                                confirm_input: String::new(),
-                                                error: None,
-                                                is_processing: false,
-                                            });
+                                        state.active_dialog = Some(AuthDialog::SetupPassphrase {
+                                            pending_profile_id: profile_id,
+                                            pending_password: password,
+                                            passphrase_input: String::new(),
+                                            confirm_input: String::new(),
+                                            error: None,
+                                            is_processing: false,
+                                        });
+                                        return task.map(Message::Settings).chain(
+                                            iced::widget::operation::focus(
+                                                crate::auth::setup_passphrase_id(),
+                                            ),
+                                        );
                                     }
                                     Some(_) if state.unlocked_passphrase.is_none() => {
                                         state.active_dialog = Some(AuthDialog::Unlock {
@@ -473,6 +500,11 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                             error: None,
                                             is_processing: false,
                                         });
+                                        return task.map(Message::Settings).chain(
+                                            iced::widget::operation::focus(
+                                                crate::auth::unlock_input_id(),
+                                            ),
+                                        );
                                     }
                                     Some(_) => {
                                         // Passphrase already unlocked — encrypt immediately.
@@ -550,8 +582,79 @@ pub fn view(state: &AppState) -> Element<'_, Message> {
 
 /// Return active subscriptions.
 pub fn subscription(state: &AppState) -> Subscription<Message> {
+    let dialog_active = state.active_dialog.is_some();
+
     match &state.screen {
-        Screen::Connection(_) | Screen::Settings(_) => Subscription::none(),
+        Screen::Connection(_) => {
+            iced::keyboard::listen()
+                .with(dialog_active)
+                .filter_map(|(dialog_active, event)| {
+                    use iced::keyboard::{Event, Key, key::Named};
+                    if let Event::KeyPressed { key, modifiers, .. } = event {
+                        match key.as_ref() {
+                            Key::Named(Named::Tab) if dialog_active => {
+                                Some(Message::AuthTabKeyPressed {
+                                    shift: modifiers.shift(),
+                                })
+                            }
+                            Key::Named(Named::Enter)
+                                if dialog_active && !modifiers.control() && !modifiers.alt() =>
+                            {
+                                Some(Message::AuthEnterPressed)
+                            }
+                            Key::Named(Named::Tab) => {
+                                Some(Message::Connection(connection::Message::TabKeyPressed {
+                                    shift: modifiers.shift(),
+                                }))
+                            }
+                            Key::Named(Named::Enter)
+                                if !modifiers.control() && !modifiers.alt() =>
+                            {
+                                Some(Message::Connection(connection::Message::EnterPressed))
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                })
+        }
+
+        Screen::Settings(_) => {
+            iced::keyboard::listen()
+                .with(dialog_active)
+                .filter_map(|(dialog_active, event)| {
+                    use iced::keyboard::{Event, Key, key::Named};
+                    if let Event::KeyPressed { key, modifiers, .. } = event {
+                        match key.as_ref() {
+                            Key::Named(Named::Tab) if dialog_active => {
+                                Some(Message::AuthTabKeyPressed {
+                                    shift: modifiers.shift(),
+                                })
+                            }
+                            Key::Named(Named::Enter)
+                                if dialog_active && !modifiers.control() && !modifiers.alt() =>
+                            {
+                                Some(Message::AuthEnterPressed)
+                            }
+                            Key::Named(Named::Tab) => {
+                                Some(Message::Settings(settings::Message::TabKeyPressed {
+                                    shift: modifiers.shift(),
+                                }))
+                            }
+                            Key::Named(Named::Enter)
+                                if !modifiers.control() && !modifiers.alt() =>
+                            {
+                                Some(Message::Settings(settings::Message::EnterPressed))
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                })
+        }
+
         Screen::Main(main) => main.subscription().map(Message::Main),
     }
 }

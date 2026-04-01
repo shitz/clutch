@@ -77,6 +77,28 @@ pub enum Message {
     GuardSave,
     GuardDiscard,
     GuardCancel,
+    // Keyboard
+    /// Tab key pressed while the settings screen is active.
+    TabKeyPressed {
+        shift: bool,
+    },
+    /// Enter key pressed while the settings screen is active.
+    EnterPressed,
+}
+
+// ── Profile form stable IDs ─────────────────────────────────────────────────────
+
+/// Returns the stable widget ID for the given position in the profile
+/// edit form (0=Name, 1=Host, 2=Port, 3=Username, 4=Password).
+/// Used in `view.rs` to bind `.id()` to each `text_input`.
+pub fn prof_ring_id(index: usize) -> iced::widget::Id {
+    match index {
+        0 => iced::widget::Id::new("prof_name"),
+        1 => iced::widget::Id::new("prof_host"),
+        2 => iced::widget::Id::new("prof_port"),
+        3 => iced::widget::Id::new("prof_username"),
+        _ => iced::widget::Id::new("prof_password"),
+    }
 }
 
 // ── Result reported back to app::update ──────────────────────────────────────
@@ -220,5 +242,52 @@ mod tests {
             matches!(result, Some(SettingsResult::Closed(_))),
             "discard + close must return Closed"
         );
+    }
+
+    // ── TabKeyPressed cycling guards ─────────────────────────────────────────
+
+    /// Tab is a no-op when the active tab is not Connections.
+    #[test]
+    fn tab_key_noop_on_general_tab() {
+        let (store, _) = store_with_profile();
+        let mut s = SettingsScreen::new(&store, None, SettingsTab::General);
+        // Emitting Tab on the General tab must not return a task (Task::none).
+        // We verify indirectly: state must not change and no result is returned.
+        let (_, result) = s.update(Message::TabKeyPressed { shift: false });
+        assert!(result.is_none());
+        assert_eq!(s.active_tab, SettingsTab::General);
+    }
+
+    /// Tab is a no-op when on the Connections tab but no profile is being edited.
+    #[test]
+    fn tab_key_noop_when_no_draft() {
+        let (store, _) = store_with_profile();
+        let mut s = SettingsScreen::new(&store, None, SettingsTab::Connections);
+        // No profile selected yet ⇒ draft is None.
+        s.draft = None;
+        let (_, result) = s.update(Message::TabKeyPressed { shift: false });
+        assert!(result.is_none());
+    }
+
+    /// Tab is active (returns a task, no result) when on Connections with a draft.
+    #[test]
+    fn tab_key_active_with_draft_on_connections_tab() {
+        let (mut s, _) = screen_with_selected_profile();
+        assert_eq!(s.active_tab, SettingsTab::Connections);
+        assert!(s.draft.is_some());
+        // Forward Tab — should return a focus task (no SettingsResult).
+        let (_, result) = s.update(Message::TabKeyPressed { shift: false });
+        assert!(result.is_none());
+        // Shift-Tab — same contract.
+        let (_, result) = s.update(Message::TabKeyPressed { shift: true });
+        assert!(result.is_none());
+    }
+
+    /// Enter is always a no-op in the settings screen.
+    #[test]
+    fn enter_key_always_noop() {
+        let (mut s, _) = screen_with_selected_profile();
+        let (_, result) = s.update(Message::EnterPressed);
+        assert!(result.is_none());
     }
 }

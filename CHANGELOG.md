@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Keyboard Tab / Shift-Tab cycles focus through all text inputs on the active screen or
+  dialog, wrapping around at the ends.
+- Pressing Enter in the Quick Connect form, Add Torrent / Add Link dialog, or the Saved
+  Profiles tab triggers the primary CTA (Connect / Add) without requiring a mouse click.
+
 ## [0.10.0] - 2026-04-01
 
 ### Added
@@ -24,6 +31,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Material Design 3 theme with light/dark mode following the system preference.
 - macOS `.dmg`, Windows NSIS `.exe`, Linux `.AppImage`, and Linux `.deb` release packages
   distributed via GitHub Releases.
-
-[Unreleased]: https://github.com/shitz/clutch/compare/v0.10.0...HEAD
-[0.10.0]: https://github.com/shitz/clutch/releases/tag/v0.10.0

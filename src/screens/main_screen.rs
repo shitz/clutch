@@ -87,12 +87,14 @@ impl MainScreen {
         }
     }
 
-    /// Subscription: tick at the configured refresh interval + serialized RPC worker.
+    /// Subscription: tick at the configured refresh interval + serialized RPC worker
+    /// + conditional dialog keyboard handler.
     pub fn subscription(&self) -> Subscription<Message> {
         let interval = Duration::from_secs(self.refresh_interval.max(1) as u64);
         let tick = iced::time::every(interval).map(|_| Message::List(torrent_list::Message::Tick));
         let worker = Subscription::run(torrent_list::rpc_worker_stream).map(Message::List);
-        Subscription::batch([tick, worker])
+        let dialog_kb = self.list.dialog_subscription().map(Message::List);
+        Subscription::batch([tick, worker, dialog_kb])
     }
 
     /// Route messages to the appropriate child; intercept cross-cutting concerns.
