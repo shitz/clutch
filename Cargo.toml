@@ -33,6 +33,6 @@ product-name = "Clutch"
 identifier = "com.github.shitz.clutch"
 description = "A transmission RPC client."
 authors = ["Samuel Hitz <samuel.hitz@gmail.com>"]
-icons = ["assets/Clutch_Icon_512x512.png"]
+icons = ["assets/Clutch_Icon.ico", "assets/Clutch_Icon_512x512.png"]
 formats = ["dmg", "nsis", "appimage", "deb"]
 before-packaging-command = "cargo build --release"
