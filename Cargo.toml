@@ -1,6 +1,6 @@
 [package]
 name = "clutch"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 
 [dependencies]
@@ -27,3 +27,12 @@ uuid = { version = "1", features = ["v4", "serde"] }
 [dev-dependencies]
 wiremock = "0.6"
 tokio = { version = "1", features = ["full"] }
+
+[package.metadata.packager]
+product-name = "Clutch"
+identifier = "com.github.shitz.clutch"
+description = "A transmission RPC client."
+authors = ["Samuel Hitz <samuel.hitz@gmail.com>"]
+icons = ["assets/Clutch_Icon_512x512.png"]
+formats = ["dmg", "nsis", "appimage", "deb"]
+before-packaging-command = "cargo build --release"
