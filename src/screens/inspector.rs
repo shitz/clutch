@@ -48,6 +48,21 @@ pub enum ActiveTab {
 #[derive(Debug, Clone)]
 pub enum Message {
     TabSelected(ActiveTab),
+    FileWantedToggled {
+        torrent_id: i64,
+        file_index: usize,
+        wanted: bool,
+    },
+    AllFilesWantedToggled {
+        torrent_id: i64,
+        file_count: usize,
+        wanted: bool,
+    },
+    /// Emitted when the SetFileWanted RPC completes (success or failure).
+    /// Removes the given indices from `pending_wanted`.
+    FileWantedSetSuccess {
+        indices: Vec<usize>,
+    },
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -55,6 +70,10 @@ pub enum Message {
 #[derive(Debug, Default)]
 pub struct InspectorScreen {
     pub active_tab: ActiveTab,
+    /// Optimistic file-wanted overrides keyed by file index.
+    /// Entries are inserted when the user toggles a checkbox and removed
+    /// when the corresponding `torrent-set` RPC completes (or fails).
+    pub pending_wanted: std::collections::HashMap<usize, bool>,
 }
 
 impl InspectorScreen {
@@ -71,10 +90,30 @@ pub fn update(state: &mut InspectorScreen, msg: Message) -> Task<Message> {
             state.active_tab = tab;
             Task::none()
         }
+        Message::FileWantedToggled {
+            file_index, wanted, ..
+        } => {
+            state.pending_wanted.insert(file_index, wanted);
+            Task::none()
+        }
+        Message::AllFilesWantedToggled {
+            file_count, wanted, ..
+        } => {
+            for i in 0..file_count {
+                state.pending_wanted.insert(i, wanted);
+            }
+            Task::none()
+        }
+        Message::FileWantedSetSuccess { indices } => {
+            for i in &indices {
+                state.pending_wanted.remove(i);
+            }
+            Task::none()
+        }
     }
 }
 
-pub fn view<'a>(state: &InspectorScreen, torrent: &'a TorrentData) -> Element<'a, Message> {
+pub fn view<'a>(state: &'a InspectorScreen, torrent: &'a TorrentData) -> Element<'a, Message> {
     // ── Material tab bar ──────────────────────────────────────────────────────
     // Each tab is a plain button (transparent background). The active tab gets
     // primary-color text; inactive tabs use muted text. A 2 px underline bar
@@ -112,7 +151,7 @@ pub fn view<'a>(state: &InspectorScreen, torrent: &'a TorrentData) -> Element<'a
 
     let content = match state.active_tab {
         ActiveTab::General => view_general(torrent),
-        ActiveTab::Files => view_files(torrent),
+        ActiveTab::Files => view_files(state, torrent),
         ActiveTab::Trackers => view_trackers(torrent),
         ActiveTab::Peers => view_peers(torrent),
     };
@@ -192,7 +231,7 @@ fn info_row<'a>(label: &'a str, value: impl ToString) -> Element<'a, Message> {
 
 // ── Files tab ─────────────────────────────────────────────────────────────────
 
-fn view_files(torrent: &TorrentData) -> Element<'_, Message> {
+fn view_files<'a>(state: &'a InspectorScreen, torrent: &'a TorrentData) -> Element<'a, Message> {
     if torrent.files.is_empty() {
         return tab_content_wrap(
             container(text("No file information available."))
@@ -201,7 +240,43 @@ fn view_files(torrent: &TorrentData) -> Element<'_, Message> {
         );
     }
 
-    let rows: Vec<Element<'_, Message>> = torrent
+    let torrent_id = torrent.id;
+    let file_count = torrent.files.len();
+
+    let effective_wanted: Vec<bool> = (0..file_count)
+        .map(|i| {
+            state
+                .pending_wanted
+                .get(&i)
+                .copied()
+                .unwrap_or_else(|| torrent.file_stats.get(i).map(|s| s.wanted).unwrap_or(true))
+        })
+        .collect();
+
+    let wanted_count = effective_wanted.iter().filter(|&&v| v).count();
+    let aggregate = if wanted_count == file_count {
+        crate::theme::CheckState::Checked
+    } else if wanted_count == 0 {
+        crate::theme::CheckState::Unchecked
+    } else {
+        crate::theme::CheckState::Mixed
+    };
+
+    let header =
+        crate::theme::m3_tristate_checkbox(aggregate, "Select All", move |next| match next {
+            crate::theme::CheckState::Unchecked => Message::AllFilesWantedToggled {
+                torrent_id,
+                file_count,
+                wanted: false,
+            },
+            _ => Message::AllFilesWantedToggled {
+                torrent_id,
+                file_count,
+                wanted: true,
+            },
+        });
+
+    let rows: Vec<Element<'a, Message>> = torrent
         .files
         .iter()
         .enumerate()
@@ -216,20 +291,29 @@ fn view_files(torrent: &TorrentData) -> Element<'_, Message> {
             } else {
                 (completed as f32 / f.length as f32).clamp(0.0, 1.0)
             };
+            let is_wanted = effective_wanted.get(i).copied().unwrap_or(true);
             row![
+                crate::theme::m3_checkbox(is_wanted, "", move |wanted| {
+                    Message::FileWantedToggled {
+                        torrent_id,
+                        file_index: i,
+                        wanted,
+                    }
+                }),
                 text(&f.name).width(Length::Fill),
                 progress_bar(0.0..=1.0, progress)
                     .length(Length::FillPortion(1))
                     .girth(10.0),
             ]
             .spacing(8)
+            .align_y(iced::alignment::Vertical::Center)
             .into()
         })
         .collect();
 
     tab_content_wrap(
         scrollable(
-            container(column(rows).spacing(2))
+            container(column![header, column(rows).spacing(2)].spacing(4))
                 .padding([8, 16])
                 .width(Length::Fill),
         )
@@ -382,5 +466,93 @@ mod tests {
 
         let _ = update(&mut screen, Message::TabSelected(ActiveTab::General));
         assert_eq!(screen.active_tab, ActiveTab::General);
+    }
+
+    // ── 5.5-5.8 – Selective file download (inspector) ────────────────────────
+
+    /// 5.5 – FileWantedToggled inserts the toggled index into `pending_wanted`.
+    #[test]
+    fn file_wanted_toggled_updates_pending() {
+        let mut screen = InspectorScreen::new();
+        let _ = update(
+            &mut screen,
+            Message::FileWantedToggled {
+                torrent_id: 1,
+                file_index: 2,
+                wanted: false,
+            },
+        );
+        assert_eq!(screen.pending_wanted.get(&2), Some(&false));
+        assert!(!screen.pending_wanted.contains_key(&0));
+    }
+
+    /// 5.6 – FileWantedSetSuccess removes only the specified indices, leaving others intact.
+    #[test]
+    fn file_wanted_set_success_clears_only_specified_indices() {
+        let mut screen = InspectorScreen::new();
+        // Seed several pending entries.
+        screen.pending_wanted.insert(0, true);
+        screen.pending_wanted.insert(1, false);
+        screen.pending_wanted.insert(2, true);
+
+        let _ = update(
+            &mut screen,
+            Message::FileWantedSetSuccess {
+                indices: vec![0, 2],
+            },
+        );
+
+        assert!(
+            !screen.pending_wanted.contains_key(&0),
+            "index 0 should be cleared"
+        );
+        assert!(
+            !screen.pending_wanted.contains_key(&2),
+            "index 2 should be cleared"
+        );
+        assert_eq!(
+            screen.pending_wanted.get(&1),
+            Some(&false),
+            "index 1 must remain untouched"
+        );
+    }
+
+    /// 5.7 – AllFilesWantedToggled inserts all indices into `pending_wanted`.
+    #[test]
+    fn all_files_wanted_toggled_populates_all_indices() {
+        let mut screen = InspectorScreen::new();
+        let _ = update(
+            &mut screen,
+            Message::AllFilesWantedToggled {
+                torrent_id: 7,
+                file_count: 4,
+                wanted: false,
+            },
+        );
+        for i in 0..4 {
+            assert_eq!(
+                screen.pending_wanted.get(&i),
+                Some(&false),
+                "index {i} should be set to false"
+            );
+        }
+    }
+
+    /// 5.8 – The inspector `Message` enum has no variant that would clear
+    /// `pending_wanted` on a background poll. Verified structurally: calling
+    /// `TabSelected` (a non-file message) leaves `pending_wanted` unchanged.
+    #[test]
+    fn poll_does_not_clear_pending_wanted() {
+        let mut screen = InspectorScreen::new();
+        screen.pending_wanted.insert(5, true);
+
+        // Simulate any non-file-wanted message arriving (e.g. from a background poll path).
+        let _ = update(&mut screen, Message::TabSelected(ActiveTab::Files));
+
+        assert_eq!(
+            screen.pending_wanted.get(&5),
+            Some(&true),
+            "pending_wanted must not be cleared by unrelated messages"
+        );
     }
 }

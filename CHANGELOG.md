@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Selective file downloading: when adding a `.torrent` file, a file list is shown with per-file
+  checkboxes.
+- Inspector Files tab now has per-file download checkboxes.
 - Keyboard Tab / Shift-Tab cycles focus through all text inputs on the active screen or
   dialog, wrapping around at the ends.
 - Pressing Enter in the Quick Connect form, Add Torrent / Add Link dialog, or the Saved

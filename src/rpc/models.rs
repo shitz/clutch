@@ -72,11 +72,17 @@ pub struct TorrentFile {
     pub length: i64,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// Per-file download progress, parallel to the `files` array.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct TorrentFileStats {
     #[serde(rename = "bytesCompleted")]
     pub bytes_completed: i64,
+    #[serde(default = "default_true")]
+    pub wanted: bool,
 }
 
 /// Tracker statistics for a single tracker announce URL.

@@ -207,6 +207,7 @@ pub async fn torrent_add(
     session_id: &str,
     payload: AddPayload,
     download_dir: Option<String>,
+    files_unwanted: Vec<i64>,
 ) -> Result<(), RpcError> {
     tracing::debug!(%url, %session_id, "Sending torrent-add");
     let mut args = match &payload {
@@ -215,6 +216,9 @@ pub async fn torrent_add(
     };
     if let Some(dir) = download_dir.as_deref().filter(|d| !d.is_empty()) {
         args["download-dir"] = serde_json::Value::String(dir.to_owned());
+    }
+    if !files_unwanted.is_empty() {
+        args["files-unwanted"] = serde_json::json!(files_unwanted);
     }
     let resp = post_rpc(
         url,
@@ -235,6 +239,41 @@ pub async fn torrent_add(
             resp.result
         )))
     }
+}
+
+/// Set per-file wanted state for an existing torrent.
+///
+/// Pass `wanted = true` to schedule files for download; `false` to skip them.
+/// The `file_indices` slice contains zero-based indices matching the `files`
+/// array position in `torrent-get` responses.
+pub async fn torrent_set_file_wanted(
+    url: &str,
+    credentials: &TransmissionCredentials,
+    session_id: &str,
+    torrent_id: i64,
+    file_indices: &[i64],
+    wanted: bool,
+) -> Result<(), RpcError> {
+    tracing::debug!(%url, %session_id, torrent_id, wanted, "Sending torrent-set (file wanted)");
+    let field = if wanted {
+        "files-wanted"
+    } else {
+        "files-unwanted"
+    };
+    let args = serde_json::json!({
+        "ids": [torrent_id],
+        field: file_indices,
+    });
+    let resp = post_rpc(
+        url,
+        credentials,
+        session_id,
+        "torrent-set",
+        Some(args),
+        Duration::from_secs(10),
+    )
+    .await?;
+    check_success(resp, "torrent-set")
 }
 
 #[cfg(test)]
@@ -626,6 +665,7 @@ mod tests {
                 "sid",
                 AddPayload::Magnet("magnet:?xt=urn:btih:abc".to_owned()),
                 None,
+                vec![],
             )
             .await
             .is_ok()
@@ -653,6 +693,7 @@ mod tests {
                 "sid",
                 AddPayload::Metainfo("dGVzdA==".to_owned()),
                 Some("/downloads".to_owned()),
+                vec![],
             )
             .await
             .is_ok()
@@ -679,6 +720,7 @@ mod tests {
                 "sid",
                 AddPayload::Magnet("magnet:?xt=urn:btih:abc".to_owned()),
                 None,
+                vec![],
             )
             .await
             .is_ok()
@@ -706,6 +748,7 @@ mod tests {
                 "sid",
                 AddPayload::Magnet("magnet:?xt=urn:btih:abc".to_owned()),
                 Some(String::new()),
+                vec![],
             )
             .await
             .is_ok()
@@ -729,6 +772,7 @@ mod tests {
             "old-sid",
             AddPayload::Magnet("magnet:?xt=urn:btih:abc".to_owned()),
             None,
+            vec![],
         )
         .await;
         assert!(matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "new-sid"));
@@ -752,9 +796,118 @@ mod tests {
                 "sid",
                 AddPayload::Magnet("magnet:?xt=urn:btih:abc".to_owned()),
                 None,
+                vec![],
             )
             .await,
             Err(RpcError::AuthError)
         ));
+    }
+
+    // ── torrent_set_file_wanted ───────────────────────────────────────────────
+
+    /// 5.1 – `torrent_set_file_wanted` with `wanted = true` sends `"files-wanted"`.
+    #[tokio::test]
+    async fn torrent_set_file_wanted_sends_files_wanted_field() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "result": "success", "arguments": {} })),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_set_file_wanted(&url, &creds, "sid", 42, &[0, 1, 2], true).await;
+        assert!(result.is_ok());
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(body["method"], "torrent-set");
+        assert!(
+            body["arguments"]["files-wanted"].is_array(),
+            "files-wanted must appear in the request body when wanted=true"
+        );
+        assert!(
+            body["arguments"]["files-unwanted"].is_null(),
+            "files-unwanted must NOT appear when wanted=true"
+        );
+    }
+
+    /// 5.2 – `torrent_set_file_wanted` with `wanted = false` sends `"files-unwanted"`.
+    #[tokio::test]
+    async fn torrent_set_file_wanted_sends_files_unwanted_field() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "result": "success", "arguments": {} })),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_set_file_wanted(&url, &creds, "sid", 42, &[3, 4], false).await;
+        assert!(result.is_ok());
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(body["method"], "torrent-set");
+        assert!(
+            body["arguments"]["files-unwanted"].is_array(),
+            "files-unwanted must appear in the request body when wanted=false"
+        );
+        assert!(
+            body["arguments"]["files-wanted"].is_null(),
+            "files-wanted must NOT appear when wanted=false"
+        );
+    }
+
+    /// 5.3 – `torrent_add` with `files_unwanted` populated includes the array in the body.
+    #[tokio::test]
+    async fn torrent_add_includes_files_unwanted_in_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "result": "success", "arguments": {} })),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_add(
+            &url,
+            &creds,
+            "sid",
+            AddPayload::Magnet("magnet:?xt=urn:btih:abc".to_owned()),
+            None,
+            vec![1, 2],
+        )
+        .await;
+        assert!(result.is_ok());
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(body["method"], "torrent-add");
+        let unwanted = &body["arguments"]["files-unwanted"];
+        assert!(
+            unwanted.is_array(),
+            "files-unwanted must be present when non-empty"
+        );
+        assert_eq!(
+            unwanted.as_array().unwrap().len(),
+            2,
+            "files-unwanted must contain exactly the supplied indices"
+        );
     }
 }

@@ -44,6 +44,13 @@ pub enum RpcWork {
         params: ConnectionParams,
         payload: AddPayload,
         download_dir: Option<String>,
+        files_unwanted: Vec<i64>,
+    },
+    SetFileWanted {
+        params: ConnectionParams,
+        torrent_id: i64,
+        file_indices: Vec<i64>,
+        wanted: bool,
     },
 }
 
@@ -53,6 +60,10 @@ pub enum RpcResult {
     TorrentsLoaded(Result<Vec<TorrentData>, RpcError>),
     ActionDone(Result<(), RpcError>),
     TorrentAdded(Result<(), RpcError>),
+    /// Outcome of a `torrent-set` file-wanted call.
+    /// Carries the original `Vec<usize>` indices so the caller can remove
+    /// them from `pending_wanted` regardless of success or failure.
+    FileWantedSet(Result<(), RpcError>, Vec<usize>),
 }
 
 /// Retry a single RPC call once on session rotation (HTTP 409).
@@ -115,6 +126,7 @@ pub async fn execute_work(work: RpcWork) -> (Option<String>, RpcResult) {
             params: p,
             payload,
             download_dir,
+            files_unwanted,
         } => {
             match api::torrent_add(
                 &p.url,
@@ -122,16 +134,56 @@ pub async fn execute_work(work: RpcWork) -> (Option<String>, RpcResult) {
                 &p.session_id,
                 payload.clone(),
                 download_dir.clone(),
+                files_unwanted.clone(),
             )
             .await
             {
                 Err(RpcError::SessionRotated(new_id)) => {
-                    let r =
-                        api::torrent_add(&p.url, &p.credentials, &new_id, payload, download_dir)
-                            .await;
+                    let r = api::torrent_add(
+                        &p.url,
+                        &p.credentials,
+                        &new_id,
+                        payload,
+                        download_dir,
+                        files_unwanted,
+                    )
+                    .await;
                     (Some(new_id), RpcResult::TorrentAdded(r))
                 }
                 other => (None, RpcResult::TorrentAdded(other)),
+            }
+        }
+        RpcWork::SetFileWanted {
+            params: p,
+            torrent_id,
+            file_indices,
+            wanted,
+        } => {
+            // Convert Vec<i64> indices back to Vec<usize> for the result payload.
+            let usize_indices: Vec<usize> = file_indices.iter().map(|&i| i as usize).collect();
+            match api::torrent_set_file_wanted(
+                &p.url,
+                &p.credentials,
+                &p.session_id,
+                torrent_id,
+                &file_indices,
+                wanted,
+            )
+            .await
+            {
+                Err(RpcError::SessionRotated(new_id)) => {
+                    let r = api::torrent_set_file_wanted(
+                        &p.url,
+                        &p.credentials,
+                        &new_id,
+                        torrent_id,
+                        &file_indices,
+                        wanted,
+                    )
+                    .await;
+                    (Some(new_id), RpcResult::FileWantedSet(r, usize_indices))
+                }
+                other => (None, RpcResult::FileWantedSet(other, usize_indices)),
             }
         }
     }

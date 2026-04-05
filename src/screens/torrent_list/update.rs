@@ -180,9 +180,11 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
         ),
 
         Message::TorrentFileRead(Ok(result)) => {
+            let n = result.files.len();
             state.add_dialog = AddDialogState::AddFile {
                 metainfo_b64: result.metainfo_b64,
                 files: result.files,
+                selected: vec![true; n],
                 destination: String::new(),
                 error: None,
             };
@@ -222,13 +224,36 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::AddDialogFileToggled(index) => {
+            if let AddDialogState::AddFile { selected, .. } = &mut state.add_dialog
+                && let Some(v) = selected.get_mut(index)
+            {
+                *v = !*v;
+            }
+            Task::none()
+        }
+
+        Message::AddDialogSelectAll => {
+            if let AddDialogState::AddFile { selected, .. } = &mut state.add_dialog {
+                selected.iter_mut().for_each(|v| *v = true);
+            }
+            Task::none()
+        }
+
+        Message::AddDialogDeselectAll => {
+            if let AddDialogState::AddFile { selected, .. } = &mut state.add_dialog {
+                selected.iter_mut().for_each(|v| *v = false);
+            }
+            Task::none()
+        }
+
         Message::AddCancelled => {
             state.add_dialog = AddDialogState::Hidden;
             Task::none()
         }
 
         Message::AddConfirmed => {
-            let (payload, download_dir) = match &state.add_dialog {
+            let (payload, download_dir, files_unwanted) = match &state.add_dialog {
                 AddDialogState::AddLink {
                     magnet,
                     destination,
@@ -240,16 +265,26 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
                     (
                         AddPayload::Magnet(magnet.clone()),
                         Some(destination.clone()),
+                        vec![],
                     )
                 }
                 AddDialogState::AddFile {
                     metainfo_b64,
                     destination,
+                    selected,
                     ..
-                } => (
-                    AddPayload::Metainfo(metainfo_b64.clone()),
-                    Some(destination.clone()),
-                ),
+                } => {
+                    let unwanted: Vec<i64> = selected
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, &want)| if want { None } else { Some(i as i64) })
+                        .collect();
+                    (
+                        AddPayload::Metainfo(metainfo_b64.clone()),
+                        Some(destination.clone()),
+                        unwanted,
+                    )
+                }
                 AddDialogState::Hidden => return Task::none(),
             };
             state.is_loading = true;
@@ -258,6 +293,7 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
                 params: state.params.clone(),
                 payload,
                 download_dir,
+                files_unwanted,
             });
             Task::none()
         }
@@ -283,6 +319,9 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
 
         // Disconnect / OpenSettingsClicked are intercepted by the parent.
         Message::Disconnect | Message::OpenSettingsClicked => Task::none(),
+
+        // FileWantedSettled is intercepted by MainScreen and forwarded to the inspector.
+        Message::FileWantedSettled(..) => Task::none(),
 
         // ── Add-dialog keyboard ───────────────────────────────────────────────
         Message::DialogTabKeyPressed { shift } => match &state.add_dialog {

@@ -68,9 +68,15 @@ pub enum Message {
     AddLinkClicked,
     AddDialogMagnetChanged(String),
     AddDialogDestinationChanged(String),
+    AddDialogFileToggled(usize),
+    AddDialogSelectAll,
+    AddDialogDeselectAll,
     AddConfirmed,
     AddCancelled,
     AddCompleted(Result<(), String>),
+    /// Fired when a SetFileWanted RPC completes (success or failure).
+    /// Carries the file indices so the inspector can clear pending_wanted.
+    FileWantedSettled(bool, Vec<usize>),
     // Escalated to parent — intercepted by MainScreen before reaching update()
     Disconnect,
     // Escalated to app — opens Settings screen
@@ -529,6 +535,7 @@ mod tests {
         screen.add_dialog = AddDialogState::AddFile {
             metainfo_b64: "dGVzdA==".to_owned(),
             files: vec![],
+            selected: vec![],
             destination: "/downloads".to_owned(),
             error: None,
         };
@@ -613,6 +620,7 @@ mod tests {
         screen.add_dialog = AddDialogState::AddFile {
             metainfo_b64: "dGVzdA==".to_owned(),
             files: vec![],
+            selected: vec![true],
             destination: "/downloads".to_owned(),
             error: None,
         };
@@ -629,5 +637,64 @@ mod tests {
         let mut screen = make_screen();
         let _ = update(&mut screen, Message::DialogEnterPressed);
         assert!(!screen.is_loading);
+    }
+
+    // ── 5.4 – Selective file selection ───────────────────────────────────────
+
+    fn make_add_file_screen(n: usize) -> TorrentListScreen {
+        let mut screen = make_screen();
+        let files: Vec<add_dialog::TorrentFileInfo> = (0..n)
+            .map(|i| add_dialog::TorrentFileInfo {
+                path: format!("file{i}.mkv"),
+                size_bytes: 1024,
+            })
+            .collect();
+        screen.add_dialog = AddDialogState::AddFile {
+            metainfo_b64: "dGVzdA==".to_owned(),
+            selected: vec![true; n],
+            files,
+            destination: String::new(),
+            error: None,
+        };
+        screen
+    }
+
+    /// 5.4a – AddDialogSelectAll sets every entry in `selected` to `true`.
+    #[test]
+    fn add_dialog_select_all_sets_all_true() {
+        let mut screen = make_add_file_screen(3);
+        // Deselect one first.
+        let _ = update(&mut screen, Message::AddDialogFileToggled(1));
+        // Select all.
+        let _ = update(&mut screen, Message::AddDialogSelectAll);
+        if let AddDialogState::AddFile { selected, .. } = &screen.add_dialog {
+            assert_eq!(selected, &vec![true, true, true]);
+        } else {
+            panic!("expected AddFile state");
+        }
+    }
+
+    /// 5.4b – AddDialogDeselectAll sets every entry in `selected` to `false`.
+    #[test]
+    fn add_dialog_deselect_all_sets_all_false() {
+        let mut screen = make_add_file_screen(3);
+        let _ = update(&mut screen, Message::AddDialogDeselectAll);
+        if let AddDialogState::AddFile { selected, .. } = &screen.add_dialog {
+            assert_eq!(selected, &vec![false, false, false]);
+        } else {
+            panic!("expected AddFile state");
+        }
+    }
+
+    /// 5.4c – AddDialogFileToggled flips only the targeted index.
+    #[test]
+    fn add_dialog_file_toggled_flips_single_index() {
+        let mut screen = make_add_file_screen(3);
+        let _ = update(&mut screen, Message::AddDialogFileToggled(1));
+        if let AddDialogState::AddFile { selected, .. } = &screen.add_dialog {
+            assert_eq!(selected, &vec![true, false, true]);
+        } else {
+            panic!("expected AddFile state");
+        }
     }
 }

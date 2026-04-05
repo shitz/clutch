@@ -15,6 +15,8 @@
 use iced::widget::{button, column, container, row, scrollable, text, text_input};
 use iced::{Element, Length};
 
+use crate::theme::{CheckState, m3_checkbox, m3_tristate_checkbox};
+
 use super::Message;
 
 // ── Focus IDs ─────────────────────────────────────────────────────────────────
@@ -55,6 +57,7 @@ pub enum AddDialogState {
     AddFile {
         metainfo_b64: String,
         files: Vec<TorrentFileInfo>,
+        selected: Vec<bool>,
         destination: String,
         error: Option<String>,
     },
@@ -113,18 +116,42 @@ pub fn view_add_dialog(state: &AddDialogState) -> Element<'_, Message> {
         }
         AddDialogState::AddFile {
             files,
+            selected,
             destination,
             error,
             ..
         } => {
-            let file_rows = files.iter().map(|f| {
-                row![
-                    text(&f.path).width(Length::Fill),
-                    text(format_file_size(f.size_bytes)),
-                ]
-                .spacing(8)
-                .into()
+            // Tri-state header checkbox
+            let checked_count = selected.iter().filter(|&&v| v).count();
+            let aggregate = if checked_count == selected.len() {
+                CheckState::Checked
+            } else if checked_count == 0 {
+                CheckState::Unchecked
+            } else {
+                CheckState::Mixed
+            };
+            let header = m3_tristate_checkbox(aggregate, "Select All", |next| match next {
+                CheckState::Unchecked => Message::AddDialogDeselectAll,
+                _ => Message::AddDialogSelectAll,
             });
+
+            let file_rows: Vec<Element<'_, Message>> = files
+                .iter()
+                .enumerate()
+                .map(|(i, f)| {
+                    let is_selected = selected.get(i).copied().unwrap_or(true);
+                    row![
+                        m3_checkbox(is_selected, "", move |_| {
+                            Message::AddDialogFileToggled(i)
+                        }),
+                        text(&f.path).width(Length::Fill),
+                        text(format_file_size(f.size_bytes)),
+                    ]
+                    .spacing(8)
+                    .align_y(iced::alignment::Vertical::Center)
+                    .into()
+                })
+                .collect();
             let file_list: Element<Message> =
                 scrollable(column(file_rows).spacing(2)).height(200).into();
 
@@ -136,6 +163,7 @@ pub fn view_add_dialog(state: &AddDialogState) -> Element<'_, Message> {
                     .padding([12, 16])
                     .style(crate::theme::m3_text_input),
                 text("Files"),
+                header,
                 file_list,
             ]
             .spacing(6)

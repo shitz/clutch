@@ -37,7 +37,7 @@ use iced::widget::{column, container};
 use iced::{Element, Length, Subscription, Task};
 
 use crate::app::ThemeMode;
-use crate::rpc::TransmissionCredentials;
+use crate::rpc::{RpcWork, TransmissionCredentials};
 use crate::screens::inspector::{self, InspectorScreen};
 use crate::screens::torrent_list::{self, TorrentListScreen};
 
@@ -119,11 +119,78 @@ impl MainScreen {
                 // Reset to General whenever a *new* torrent is selected.
                 if self.list.selected_id != prev && self.list.selected_id.is_some() {
                     self.inspector.active_tab = inspector::ActiveTab::General;
+                    // Clear stale file-wanted overrides from the previous selection.
+                    self.inspector.pending_wanted.clear();
                 }
                 task
             }
 
-            Message::List(msg) => torrent_list::update(&mut self.list, msg).map(Message::List),
+            // Intercept FileWantedSettled to update pending_wanted in the inspector.
+            // On success: trigger an immediate poll; pending entries are reconciled and
+            // removed in the List catch-all once TorrentsUpdated confirms the new state.
+            // On failure: revert the optimistic UI immediately.
+            Message::List(torrent_list::Message::FileWantedSettled(success, indices)) => {
+                if success {
+                    self.list.enqueue_torrent_get();
+                    Task::none()
+                } else {
+                    inspector::update(
+                        &mut self.inspector,
+                        inspector::Message::FileWantedSetSuccess { indices },
+                    )
+                    .map(Message::Inspector)
+                }
+            }
+
+            // Intercept file-wanted toggles from the inspector to enqueue RPC work.
+            Message::Inspector(inspector::Message::FileWantedToggled {
+                torrent_id,
+                file_index,
+                wanted,
+            }) => {
+                self.inspector.pending_wanted.insert(file_index, wanted);
+                self.list.enqueue(RpcWork::SetFileWanted {
+                    params: self.list.params.clone(),
+                    torrent_id,
+                    file_indices: vec![file_index as i64],
+                    wanted,
+                });
+                Task::none()
+            }
+
+            Message::Inspector(inspector::Message::AllFilesWantedToggled {
+                torrent_id,
+                file_count,
+                wanted,
+            }) => {
+                for i in 0..file_count {
+                    self.inspector.pending_wanted.insert(i, wanted);
+                }
+                let file_indices: Vec<i64> = (0..file_count as i64).collect();
+                self.list.enqueue(RpcWork::SetFileWanted {
+                    params: self.list.params.clone(),
+                    torrent_id,
+                    file_indices,
+                    wanted,
+                });
+                Task::none()
+            }
+
+            Message::List(msg) => {
+                let task = torrent_list::update(&mut self.list, msg).map(Message::List);
+                // After every list update, remove any pending file-wanted entries that are
+                // already confirmed by the latest polled file_stats.  This is the primary
+                // mechanism for clearing pending_wanted after a successful torrent-set RPC.
+                if !self.inspector.pending_wanted.is_empty()
+                    && let Some(torrent) = self.list.selected_torrent()
+                {
+                    let file_stats = &torrent.file_stats;
+                    self.inspector
+                        .pending_wanted
+                        .retain(|i, wanted| file_stats.get(*i).map(|s| s.wanted) != Some(*wanted));
+                }
+                task
+            }
 
             Message::Inspector(msg) => {
                 inspector::update(&mut self.inspector, msg).map(Message::Inspector)
