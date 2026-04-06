@@ -27,6 +27,9 @@ API.
 - **Multiple connection profiles** — save and switch between Transmission instances
 - **Credential encryption** — passwords are encrypted at rest using Argon2id + ChaCha20-Poly1305
 - **Theme** — light, dark, and system-follow modes (Material Design 3)
+- **Selective download** — pick and choose which files in a torrent to download
+- **Configurable bandwidth limits** — global alternative speed limits (Turtle Mode) and per-torrent
+  limits for download/upload speed and seeding ratio
 - **Cross-platform** — macOS, Linux, and Windows (no GTK, no web views, pure Rust)
 
 ## Why
