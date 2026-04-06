@@ -67,7 +67,7 @@ pub enum Message {
     /// Config file loaded from disk.
     ProfilesLoaded(ProfileStore),
     /// Result of the auto-connect probe fired after `ProfilesLoaded`.
-    AutoConnectResult(Result<crate::rpc::SessionInfo, String>),
+    AutoConnectResult(Result<crate::rpc::SessionData, String>),
 
     // -- Connection screen (delegated) --
     Connection(connection::Message),
@@ -146,6 +146,8 @@ pub struct AppState {
     pub unlocked_passphrase: Option<SecretString>,
     /// Active auth dialog, rendered as a modal overlay over the current screen.
     pub active_dialog: Option<AuthDialog>,
+    /// Whether Turtle Mode (alternative speed limits) is currently active on the daemon.
+    pub alt_speed_enabled: bool,
 }
 
 impl AppState {
@@ -165,6 +167,7 @@ impl AppState {
             stashed_main: None,
             unlocked_passphrase: None,
             active_dialog: None,
+            alt_speed_enabled: false,
         };
         // Re-emit the already-loaded store via Task::done so ProfilesLoaded
         // runs on the first event-loop tick (auto-connect, launchpad rebuild)
@@ -180,6 +183,53 @@ impl AppState {
 }
 
 // ── Elm functions ─────────────────────────────────────────────────────────────
+
+/// If the connected profile has any configured bandwidth or seeding settings, push them
+/// to the daemon via `session-set` on connect. Returns `None` when all values are default.
+fn make_push_bandwidth_task(
+    url: &str,
+    creds: &crate::rpc::TransmissionCredentials,
+    session_id: &str,
+    profile: &crate::profile::ConnectionProfile,
+) -> Option<Task<Message>> {
+    let has_anything = profile.speed_limit_down_enabled
+        || profile.speed_limit_down != 0
+        || profile.speed_limit_up_enabled
+        || profile.speed_limit_up != 0
+        || profile.alt_speed_down != 0
+        || profile.alt_speed_up != 0
+        || profile.ratio_limit_enabled
+        || profile.ratio_limit != 0.0;
+    if !has_anything {
+        return None;
+    }
+    let url = url.to_owned();
+    let creds = creds.clone();
+    let sid = session_id.to_owned();
+    let args = crate::rpc::SessionSetArgs {
+        speed_limit_down_enabled: Some(profile.speed_limit_down_enabled),
+        speed_limit_down: Some(profile.speed_limit_down),
+        speed_limit_up_enabled: Some(profile.speed_limit_up_enabled),
+        speed_limit_up: Some(profile.speed_limit_up),
+        alt_speed_down: if profile.alt_speed_down != 0 {
+            Some(profile.alt_speed_down)
+        } else {
+            None
+        },
+        alt_speed_up: if profile.alt_speed_up != 0 {
+            Some(profile.alt_speed_up)
+        } else {
+            None
+        },
+        seed_ratio_limited: Some(profile.ratio_limit_enabled),
+        seed_ratio_limit: Some(profile.ratio_limit),
+        ..Default::default()
+    };
+    Some(Task::perform(
+        async move { crate::rpc::session_set(&url, &creds, &sid, &args).await },
+        |_| Message::Noop,
+    ))
+}
 
 /// Stash the current main screen (if any) and switch to Settings.
 fn open_settings(state: &mut AppState, tab: SettingsTab) {
@@ -242,6 +292,9 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 let sid = info.session_id.clone();
                 let profile_name = profile.name.clone();
                 tracing::info!(profile = %profile_name, "Auto-connect succeeded");
+                state.alt_speed_enabled = info.alt_speed_enabled;
+                // Push the profile's stored bandwidth settings to the daemon.
+                let push_task = make_push_bandwidth_task(&creds.rpc_url(), &creds, &sid, profile);
                 state.screen = Screen::Main(MainScreen::new_with_label(
                     creds,
                     sid,
@@ -249,6 +302,9 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     Some(id),
                     state.profiles.general.refresh_interval,
                 ));
+                if let Some(t) = push_task {
+                    return t;
+                }
             }
             Err(err) => {
                 tracing::warn!(error = %err, "Auto-connect failed; showing connection launchpad");
@@ -274,6 +330,34 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
         }
         Message::Main(main_screen::Message::OpenSettingsClicked) => {
             open_settings(state, SettingsTab::General);
+            return Task::none();
+        }
+        Message::Main(main_screen::Message::TurtleModeToggled) => {
+            let new_val = !state.alt_speed_enabled;
+            state.alt_speed_enabled = new_val;
+            if let Screen::Main(main) = &state.screen {
+                let params = main.list.params.clone();
+                let args = crate::rpc::SessionSetArgs {
+                    alt_speed_enabled: Some(new_val),
+                    ..Default::default()
+                };
+                return Task::perform(
+                    async move {
+                        crate::rpc::session_set(
+                            &params.url,
+                            &params.credentials,
+                            &params.session_id,
+                            &args,
+                        )
+                        .await
+                    },
+                    |_| Message::Noop,
+                );
+            }
+            return Task::none();
+        }
+        Message::Main(main_screen::Message::SessionDataLoaded(data)) => {
+            state.alt_speed_enabled = data.alt_speed_enabled;
             return Task::none();
         }
         Message::Connection(connection::Message::ManageProfilesClicked) => {
@@ -325,11 +409,20 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 Message::Connection(msg) => {
                     let (task, opt_success) = conn.update(msg);
                     if let Some(success) = opt_success {
+                        state.alt_speed_enabled = success.alt_speed_enabled;
                         if let Some(id) = success.profile_id {
                             // Saved profile: persist last_connected.
                             state.active_profile = Some(id);
                             state.profiles.last_connected = Some(id);
                             let profile_name = state.profiles.get(id).map(|p| p.name.clone());
+                            let push_task = state.profiles.get(id).and_then(|p| {
+                                make_push_bandwidth_task(
+                                    &success.creds.rpc_url(),
+                                    &success.creds,
+                                    &success.session_id,
+                                    p,
+                                )
+                            });
                             let profiles_snap = state.profiles.clone();
                             let save_task =
                                 Task::perform(async move { profiles_snap.save().await }, |_| {
@@ -343,7 +436,12 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 state.profiles.general.refresh_interval,
                             ));
                             tracing::info!(profile_id = %id, "Connected via saved profile");
-                            return save_task.chain(task.map(Message::Connection));
+                            let base = save_task.chain(task.map(Message::Connection));
+                            return if let Some(t) = push_task {
+                                base.chain(t)
+                            } else {
+                                base
+                            };
                         } else {
                             // Ephemeral quick connect: nothing is persisted.
                             state.active_profile = None;
@@ -431,6 +529,35 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                     Message::AutoConnectResult,
                                 );
                                 return task.map(Message::Settings).chain(probe);
+                            }
+                            settings::SettingsResult::ActiveProfileBandwidthSaved {
+                                profile_id,
+                                mut store,
+                            } => {
+                                // Only bandwidth/seeding settings changed — no reconnect.
+                                // Just update the store and push new limits to the daemon.
+                                store.adopt_from(&state.profiles);
+                                state.profiles = store;
+                                let push_task = state.profiles.get(profile_id).and_then(|p| {
+                                    state.stashed_main.as_ref().map(|m| {
+                                        make_push_bandwidth_task(
+                                            &m.list.params.url,
+                                            &m.list.params.credentials,
+                                            &m.list.params.session_id,
+                                            p,
+                                        )
+                                    })
+                                });
+                                let snap = state.profiles.clone();
+                                let save = Task::perform(async move { snap.save().await }, |_| {
+                                    Message::Noop
+                                });
+                                let base = task.map(Message::Settings).chain(save);
+                                return if let Some(Some(push)) = push_task {
+                                    base.chain(push)
+                                } else {
+                                    base
+                                };
                             }
                             settings::SettingsResult::Closed(mut store) => {
                                 store.adopt_from(&state.profiles);
@@ -574,7 +701,9 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
 pub fn view(state: &AppState) -> Element<'_, Message> {
     let base: Element<'_, Message> = match &state.screen {
         Screen::Connection(conn) => conn.view().map(Message::Connection),
-        Screen::Main(main) => main.view(state.theme).map(Message::Main),
+        Screen::Main(main) => main
+            .view(state.theme, state.alt_speed_enabled)
+            .map(Message::Main),
         Screen::Settings(settings) => settings.view().map(Message::Settings),
     };
     crate::auth::view_overlay(state.active_dialog.as_ref(), base)

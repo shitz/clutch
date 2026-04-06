@@ -20,7 +20,10 @@
 use std::time::Duration;
 
 use super::error::RpcError;
-use super::models::{AddPayload, SessionInfo, TorrentData, TransmissionCredentials};
+use super::models::{
+    AddPayload, SessionData, SessionSetArgs, TorrentBandwidthArgs, TorrentData,
+    TransmissionCredentials,
+};
 use super::transport::{RpcResponse, post_rpc};
 
 /// Check that an RPC response has `"success"` as its result string.
@@ -37,31 +40,33 @@ fn check_success(resp: RpcResponse, method: &str) -> Result<(), RpcError> {
     }
 }
 
-/// Probe the daemon with a lightweight `session-get` call.
+/// Probe the daemon with a `session-get` call.
 ///
-/// Handles one level of session rotation automatically. Returns the current
-/// session ID on success.
+/// Handles one level of session rotation automatically. Returns a
+/// [`SessionData`] containing the session ID and current alternative speed
+/// limit settings.
 pub async fn session_get(
     url: &str,
     credentials: &TransmissionCredentials,
     session_id: &str,
-) -> Result<SessionInfo, RpcError> {
+) -> Result<SessionData, RpcError> {
     tracing::debug!(%url, "Probing daemon with session-get");
+    let args = serde_json::json!({
+        "fields": ["alt-speed-enabled", "alt-speed-down", "alt-speed-up"]
+    });
     match post_rpc(
         url,
         credentials,
         session_id,
         "session-get",
-        None,
+        Some(args.clone()),
         Duration::from_secs(5),
     )
     .await
     {
-        Ok(_) => {
+        Ok(resp) => {
             tracing::info!(%url, %session_id, "session-get probe succeeded");
-            Ok(SessionInfo {
-                session_id: session_id.to_owned(),
-            })
+            Ok(parse_session_data(session_id.to_owned(), &resp.arguments))
         }
         Err(RpcError::SessionRotated(new_id)) => {
             tracing::debug!(%url, new_id = %new_id, "Session ID rotated during probe, retrying once");
@@ -70,14 +75,14 @@ pub async fn session_get(
                 credentials,
                 &new_id,
                 "session-get",
-                None,
+                Some(args),
                 Duration::from_secs(5),
             )
             .await
             {
-                Ok(_) => {
+                Ok(resp) => {
                     tracing::info!(%url, session_id = %new_id, "session-get probe succeeded after rotation");
-                    Ok(SessionInfo { session_id: new_id })
+                    Ok(parse_session_data(new_id, &resp.arguments))
                 }
                 Err(e) => {
                     tracing::error!(error = %e, %url, "session-get retry failed after rotation");
@@ -92,6 +97,69 @@ pub async fn session_get(
     }
 }
 
+fn parse_session_data(session_id: String, arguments: &serde_json::Value) -> SessionData {
+    SessionData {
+        session_id,
+        alt_speed_enabled: arguments
+            .get("alt-speed-enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        alt_speed_down: arguments
+            .get("alt-speed-down")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32,
+        alt_speed_up: arguments
+            .get("alt-speed-up")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32,
+    }
+}
+
+/// Update session-level settings on the daemon.
+pub async fn session_set(
+    url: &str,
+    credentials: &TransmissionCredentials,
+    session_id: &str,
+    args: &SessionSetArgs,
+) -> Result<(), RpcError> {
+    tracing::debug!(%url, %session_id, "Sending session-set");
+    let payload = serde_json::to_value(args).map_err(|e| RpcError::ParseError(e.to_string()))?;
+    let resp = post_rpc(
+        url,
+        credentials,
+        session_id,
+        "session-set",
+        Some(payload),
+        Duration::from_secs(10),
+    )
+    .await?;
+    check_success(resp, "session-set")
+}
+
+/// Set per-torrent bandwidth limits on the daemon.
+pub async fn torrent_set_bandwidth(
+    url: &str,
+    credentials: &TransmissionCredentials,
+    session_id: &str,
+    torrent_id: i64,
+    args: TorrentBandwidthArgs,
+) -> Result<(), RpcError> {
+    tracing::debug!(%url, %session_id, torrent_id, "Sending torrent-set (bandwidth)");
+    let mut payload =
+        serde_json::to_value(&args).map_err(|e| RpcError::ParseError(e.to_string()))?;
+    payload["ids"] = serde_json::json!([torrent_id]);
+    let resp = post_rpc(
+        url,
+        credentials,
+        session_id,
+        "torrent-set",
+        Some(payload),
+        Duration::from_secs(10),
+    )
+    .await?;
+    check_success(resp, "torrent-set (bandwidth)")
+}
+
 /// Fetch the complete torrent list from the daemon.
 pub async fn torrent_get(
     url: &str,
@@ -104,7 +172,11 @@ pub async fn torrent_get(
             "id", "name", "status", "percentDone",
             "totalSize", "downloadedEver", "uploadedEver", "uploadRatio",
             "eta", "rateDownload", "rateUpload",
-            "files", "fileStats", "trackerStats", "peers"
+            "files", "fileStats", "trackerStats", "peers",
+            "downloadLimited", "downloadLimit",
+            "uploadLimited", "uploadLimit",
+            "seedRatioLimit", "seedRatioMode",
+            "honorsSessionLimits"
         ]
     });
 
@@ -282,6 +354,7 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    use super::super::models::{SessionSetArgs, TorrentBandwidthArgs};
     use super::super::transport::SESSION_ID_HEADER;
 
     fn test_credentials() -> TransmissionCredentials {
@@ -291,6 +364,32 @@ mod tests {
             username: None,
             password: None,
         }
+    }
+
+    // ── session_get ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn session_get_populates_alt_speed_fields() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": "success",
+                "arguments": {
+                    "alt-speed-enabled": true,
+                    "alt-speed-down": 500,
+                    "alt-speed-up": 50
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let data = session_get(&url, &creds, "sid").await.unwrap();
+        assert!(data.alt_speed_enabled);
+        assert_eq!(data.alt_speed_down, 500);
+        assert_eq!(data.alt_speed_up, 50);
     }
 
     // ── session_get ───────────────────────────────────────────────────────────
@@ -909,5 +1008,114 @@ mod tests {
             2,
             "files-unwanted must contain exactly the supplied indices"
         );
+    }
+
+    // ── session_set ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn session_set_sends_only_some_fields() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "result": "success", "arguments": {} })),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let args = SessionSetArgs {
+            alt_speed_enabled: Some(true),
+            alt_speed_down: Some(500),
+            ..Default::default()
+        };
+        assert!(session_set(&url, &creds, "sid", &args).await.is_ok());
+
+        let requests = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(body["method"], "session-set");
+        assert_eq!(body["arguments"]["alt-speed-enabled"], true);
+        assert_eq!(body["arguments"]["alt-speed-down"], 500);
+        assert!(
+            body["arguments"]["alt-speed-up"].is_null(),
+            "alt-speed-up must be absent when None"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_set_session_rotation() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(ResponseTemplate::new(409).insert_header(SESSION_ID_HEADER, "new-id"))
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let args = SessionSetArgs {
+            alt_speed_enabled: Some(false),
+            ..Default::default()
+        };
+        let result = session_set(&url, &creds, "old-id", &args).await;
+        assert!(matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "new-id"));
+    }
+
+    // ── torrent_set_bandwidth ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn torrent_set_bandwidth_sends_ids_and_fields() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "result": "success", "arguments": {} })),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let args = TorrentBandwidthArgs {
+            download_limited: Some(true),
+            download_limit: Some(1000),
+            upload_limited: None,
+            ..Default::default()
+        };
+        assert!(
+            torrent_set_bandwidth(&url, &creds, "sid", 42, args)
+                .await
+                .is_ok()
+        );
+
+        let requests = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(body["method"], "torrent-set");
+        assert_eq!(body["arguments"]["ids"][0], 42);
+        assert_eq!(body["arguments"]["downloadLimited"], true);
+        assert_eq!(body["arguments"]["downloadLimit"], 1000);
+        assert!(
+            body["arguments"]["uploadLimited"].is_null(),
+            "uploadLimited must be absent when None"
+        );
+    }
+
+    #[tokio::test]
+    async fn torrent_set_bandwidth_session_rotation() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(ResponseTemplate::new(409).insert_header(SESSION_ID_HEADER, "new-id"))
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result =
+            torrent_set_bandwidth(&url, &creds, "old-id", 1, TorrentBandwidthArgs::default()).await;
+        assert!(matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "new-id"));
     }
 }

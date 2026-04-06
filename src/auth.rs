@@ -877,6 +877,14 @@ mod tests {
                 port: 9091,
                 username: None,
                 encrypted_password: None,
+                speed_limit_down: 0,
+                speed_limit_down_enabled: false,
+                speed_limit_up: 0,
+                speed_limit_up_enabled: false,
+                alt_speed_down: 0,
+                alt_speed_up: 0,
+                ratio_limit: 0.0,
+                ratio_limit_enabled: false,
             });
 
         let result = handle_message(
@@ -929,6 +937,14 @@ mod tests {
                 port: 9091,
                 username: None,
                 encrypted_password: None,
+                speed_limit_down: 0,
+                speed_limit_down_enabled: false,
+                speed_limit_up: 0,
+                speed_limit_up_enabled: false,
+                alt_speed_down: 0,
+                alt_speed_up: 0,
+                ratio_limit: 0.0,
+                ratio_limit_enabled: false,
             });
 
         handle_message(

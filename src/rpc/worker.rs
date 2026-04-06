@@ -18,7 +18,9 @@
 
 use super::api;
 use super::error::RpcError;
-use super::models::{AddPayload, ConnectionParams, TorrentData};
+use super::models::{
+    AddPayload, ConnectionParams, SessionData, SessionSetArgs, TorrentBandwidthArgs, TorrentData,
+};
 
 /// A unit of work for the serialized RPC worker subscription.
 ///
@@ -52,6 +54,16 @@ pub enum RpcWork {
         file_indices: Vec<i64>,
         wanted: bool,
     },
+    SessionGet(ConnectionParams),
+    SessionSet {
+        params: ConnectionParams,
+        args: SessionSetArgs,
+    },
+    TorrentSetBandwidth {
+        params: ConnectionParams,
+        torrent_id: i64,
+        args: TorrentBandwidthArgs,
+    },
 }
 
 /// The typed outcome of one [`RpcWork`] item.
@@ -64,6 +76,10 @@ pub enum RpcResult {
     /// Carries the original `Vec<usize>` indices so the caller can remove
     /// them from `pending_wanted` regardless of success or failure.
     FileWantedSet(Result<(), RpcError>, Vec<usize>),
+    /// Outcome of a periodic `session-get` poll.
+    SessionDataLoaded(Result<SessionData, RpcError>),
+    /// Outcome of a `torrent-set` bandwidth call.
+    BandwidthSet(Result<(), RpcError>),
 }
 
 /// Retry a single RPC call once on session rotation (HTTP 409).
@@ -184,6 +200,52 @@ pub async fn execute_work(work: RpcWork) -> (Option<String>, RpcResult) {
                     (Some(new_id), RpcResult::FileWantedSet(r, usize_indices))
                 }
                 other => (None, RpcResult::FileWantedSet(other, usize_indices)),
+            }
+        }
+        RpcWork::SessionGet(p) => {
+            match api::session_get(&p.url, &p.credentials, &p.session_id).await {
+                Err(RpcError::SessionRotated(new_id)) => {
+                    let r = api::session_get(&p.url, &p.credentials, &new_id).await;
+                    (Some(new_id), RpcResult::SessionDataLoaded(r))
+                }
+                other => (None, RpcResult::SessionDataLoaded(other)),
+            }
+        }
+        RpcWork::SessionSet { params: p, args } => {
+            match api::session_set(&p.url, &p.credentials, &p.session_id, &args).await {
+                Err(RpcError::SessionRotated(new_id)) => {
+                    let r = api::session_set(&p.url, &p.credentials, &new_id, &args).await;
+                    (Some(new_id), RpcResult::ActionDone(r))
+                }
+                other => (None, RpcResult::ActionDone(other)),
+            }
+        }
+        RpcWork::TorrentSetBandwidth {
+            params: p,
+            torrent_id,
+            args,
+        } => {
+            match api::torrent_set_bandwidth(
+                &p.url,
+                &p.credentials,
+                &p.session_id,
+                torrent_id,
+                args.clone(),
+            )
+            .await
+            {
+                Err(RpcError::SessionRotated(new_id)) => {
+                    let r = api::torrent_set_bandwidth(
+                        &p.url,
+                        &p.credentials,
+                        &new_id,
+                        torrent_id,
+                        args,
+                    )
+                    .await;
+                    (Some(new_id), RpcResult::BandwidthSet(r))
+                }
+                other => (None, RpcResult::BandwidthSet(other)),
             }
         }
     }

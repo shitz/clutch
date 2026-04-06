@@ -71,6 +71,8 @@ pub const ICON_TRASH: char = '\u{E872}';
 pub const ICON_CLOSE: char = '\u{E5CD}';
 pub const ICON_SAVE: char = '\u{E161}';
 pub const ICON_UNDO: char = '\u{E166}';
+/// Material Icons "speed" glyph — used for the Turtle Mode toolbar toggle.
+pub const ICON_SPEED: char = '\u{E9E4}';
 
 // ── Checkbox icon codepoints ──────────────────────────────────────────────────
 
@@ -451,6 +453,81 @@ pub fn icon_button<'a, Message: Clone + 'a>(
                 }
             }
             _ => theme.palette().text,
+        };
+        button::Style {
+            background: bg,
+            text_color,
+            border: Border {
+                radius: 100.0.into(),
+                width: 0.0,
+                color: Color::TRANSPARENT,
+            },
+            shadow: Shadow::default(),
+            snap: false,
+        }
+    })
+}
+
+/// Like [`icon_button`] but highlights with the primary colour when `active` is `true`.
+///
+/// Use this for toggle buttons whose pressed state should be persistently
+/// visible (e.g. the Turtle Mode speed-limiter toggle in the toolbar).
+pub fn active_icon_button<'a, Message: Clone + 'a>(
+    content: impl Into<Element<'a, Message>>,
+    active: bool,
+) -> iced::widget::Button<'a, Message> {
+    iced::widget::button(
+        iced::widget::container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center(Length::Fill),
+    )
+    .padding(0)
+    .width(Length::Fixed(36.0))
+    .height(Length::Fixed(36.0))
+    .style(move |theme: &Theme, status| {
+        let primary = theme.palette().primary;
+        let is_dark = theme.extended_palette().background.base.color.r < 0.5;
+        let bg = if active {
+            Some(iced::Background::Color(Color {
+                r: primary.r,
+                g: primary.g,
+                b: primary.b,
+                a: match status {
+                    button::Status::Pressed => 0.32,
+                    _ => 0.20,
+                },
+            }))
+        } else {
+            match status {
+                button::Status::Hovered => Some(iced::Background::Color(Color {
+                    r: primary.r,
+                    g: primary.g,
+                    b: primary.b,
+                    a: 0.12,
+                })),
+                button::Status::Pressed => Some(iced::Background::Color(Color {
+                    r: primary.r,
+                    g: primary.g,
+                    b: primary.b,
+                    a: 0.20,
+                })),
+                _ => None,
+            }
+        };
+        let text_color = if active {
+            primary
+        } else {
+            match status {
+                button::Status::Disabled => {
+                    if is_dark {
+                        DISABLED_DARK
+                    } else {
+                        DISABLED_LIGHT
+                    }
+                }
+                _ => theme.palette().text,
+            }
         };
         button::Style {
             background: bg,

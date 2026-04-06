@@ -41,6 +41,7 @@ pub enum ActiveTab {
     Files,
     Trackers,
     Peers,
+    Options,
 }
 
 // ── Message ───────────────────────────────────────────────────────────────────
@@ -63,6 +64,48 @@ pub enum Message {
     FileWantedSetSuccess {
         indices: Vec<usize>,
     },
+    // ── Options tab messages ──────────────────────────────────────────────
+    OptionsDownloadLimitToggled(bool),
+    OptionsDownloadLimitChanged(String),
+    OptionsDownloadLimitSubmitted,
+    OptionsUploadLimitToggled(bool),
+    OptionsUploadLimitChanged(String),
+    OptionsUploadLimitSubmitted,
+    OptionsRatioModeChanged(u8),
+    OptionsRatioLimitChanged(String),
+    OptionsRatioLimitSubmitted,
+    OptionsHonorGlobalToggled(bool),
+}
+
+// ── InspectorOptionsState ────────────────────────────────────────────────────
+
+/// Local draft for the per-torrent Options tab.
+/// Reset whenever a new torrent is selected.
+#[derive(Debug, Default, Clone)]
+pub struct InspectorOptionsState {
+    pub download_limited: bool,
+    pub download_limit_val: String,
+    pub upload_limited: bool,
+    pub upload_limit_val: String,
+    /// 0 = Global, 1 = Custom, 2 = Unlimited
+    pub ratio_mode: u8,
+    pub ratio_limit_val: String,
+    pub honors_session_limits: bool,
+}
+
+impl InspectorOptionsState {
+    /// Populate from fresh torrent data.
+    pub fn from_torrent(t: &TorrentData) -> Self {
+        Self {
+            download_limited: t.download_limited,
+            download_limit_val: t.download_limit.to_string(),
+            upload_limited: t.upload_limited,
+            upload_limit_val: t.upload_limit.to_string(),
+            ratio_mode: t.seed_ratio_mode,
+            ratio_limit_val: format!("{:.2}", t.seed_ratio_limit),
+            honors_session_limits: t.honors_session_limits,
+        }
+    }
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -74,6 +117,8 @@ pub struct InspectorScreen {
     /// Entries are inserted when the user toggles a checkbox and removed
     /// when the corresponding `torrent-set` RPC completes (or fails).
     pub pending_wanted: std::collections::HashMap<usize, bool>,
+    /// Draft state for the Options tab.
+    pub options: InspectorOptionsState,
 }
 
 impl InspectorScreen {
@@ -110,6 +155,48 @@ pub fn update(state: &mut InspectorScreen, msg: Message) -> Task<Message> {
             }
             Task::none()
         }
+        // ── Options tab ───────────────────────────────────────────────────────
+        Message::OptionsDownloadLimitToggled(v) => {
+            state.options.download_limited = v;
+            Task::none()
+        }
+        Message::OptionsDownloadLimitChanged(v) => {
+            if v.is_empty() || v.chars().all(|c| c.is_ascii_digit()) {
+                state.options.download_limit_val = v;
+            }
+            Task::none()
+        }
+        Message::OptionsUploadLimitToggled(v) => {
+            state.options.upload_limited = v;
+            Task::none()
+        }
+        Message::OptionsUploadLimitChanged(v) => {
+            if v.is_empty() || v.chars().all(|c| c.is_ascii_digit()) {
+                state.options.upload_limit_val = v;
+            }
+            Task::none()
+        }
+        Message::OptionsRatioModeChanged(v) => {
+            state.options.ratio_mode = v;
+            Task::none()
+        }
+        Message::OptionsRatioLimitChanged(v) => {
+            // Ratio allows digits and at most one decimal point.
+            let dot_count = v.chars().filter(|c| *c == '.').count();
+            if v.is_empty() || (v.chars().all(|c| c.is_ascii_digit() || c == '.') && dot_count <= 1)
+            {
+                state.options.ratio_limit_val = v;
+            }
+            Task::none()
+        }
+        Message::OptionsHonorGlobalToggled(v) => {
+            state.options.honors_session_limits = v;
+            Task::none()
+        }
+        // Submit messages are intercepted by main_screen; nothing to update here.
+        Message::OptionsDownloadLimitSubmitted
+        | Message::OptionsUploadLimitSubmitted
+        | Message::OptionsRatioLimitSubmitted => Task::none(),
     }
 }
 
@@ -125,6 +212,7 @@ pub fn view<'a>(state: &'a InspectorScreen, torrent: &'a TorrentData) -> Element
             ("Files", ActiveTab::Files),
             ("Trackers", ActiveTab::Trackers),
             ("Peers", ActiveTab::Peers),
+            ("Options", ActiveTab::Options),
         ],
         state.active_tab,
         Message::TabSelected,
@@ -154,6 +242,7 @@ pub fn view<'a>(state: &'a InspectorScreen, torrent: &'a TorrentData) -> Element
         ActiveTab::Files => view_files(state, torrent),
         ActiveTab::Trackers => view_trackers(torrent),
         ActiveTab::Peers => view_peers(torrent),
+        ActiveTab::Options => view_options(&state.options),
     };
 
     container(
@@ -443,6 +532,113 @@ fn view_peers(torrent: &TorrentData) -> Element<'_, Message> {
         .spacing(4)
         .into(),
     )
+}
+
+fn view_options(opts: &InspectorOptionsState) -> Element<'_, Message> {
+    use iced::widget::{text_input, toggler};
+
+    let field_w = Length::Fixed(90.0);
+    let tog_gap = || Space::new().width(Length::Fixed(8.0));
+    let sub_label = |s: &'static str| {
+        text(s)
+            .size(12)
+            .style(|t: &iced::Theme| iced::widget::text::Style {
+                color: Some(t.palette().text.scale_alpha(0.45)),
+            })
+    };
+
+    // ── Left card: Speed Limits + Honor Global ─────────────────────────────
+    let dl_row = row![
+        toggler(opts.download_limited)
+            .on_toggle(Message::OptionsDownloadLimitToggled)
+            .width(Length::Shrink),
+        tog_gap(),
+        text("Limit Download (KB/s)").width(Length::Fill),
+        text_input("", &opts.download_limit_val)
+            .on_input(Message::OptionsDownloadLimitChanged)
+            .on_submit(Message::OptionsDownloadLimitSubmitted)
+            .width(field_w)
+            .padding([10, 14])
+            .style(crate::theme::m3_text_input),
+    ]
+    .align_y(iced::Center);
+
+    let ul_row = row![
+        toggler(opts.upload_limited)
+            .on_toggle(Message::OptionsUploadLimitToggled)
+            .width(Length::Shrink),
+        tog_gap(),
+        text("Limit Upload (KB/s)").width(Length::Fill),
+        text_input("", &opts.upload_limit_val)
+            .on_input(Message::OptionsUploadLimitChanged)
+            .on_submit(Message::OptionsUploadLimitSubmitted)
+            .width(field_w)
+            .padding([10, 14])
+            .style(crate::theme::m3_text_input),
+    ]
+    .align_y(iced::Center);
+
+    let honor_row = row![
+        toggler(opts.honors_session_limits)
+            .on_toggle(Message::OptionsHonorGlobalToggled)
+            .width(Length::Shrink),
+        tog_gap(),
+        text("Honor Global Speed Limits").width(Length::Fill),
+    ]
+    .align_y(iced::Center);
+
+    let left_card = container(
+        scrollable(column![sub_label("Speed Limits"), dl_row, ul_row, honor_row,].spacing(12))
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new().width(6).scroller_width(6),
+            )),
+    )
+    .style(crate::theme::m3_card)
+    .padding([12, 16])
+    .width(Length::FillPortion(1));
+
+    // ── Right card: Seeding Ratio (segmented + optional custom) ───────────────
+    let ratio_ctrl = crate::theme::segmented_control(
+        &[("Global", 0_u8), ("Custom", 1_u8), ("Unlimited", 2_u8)],
+        opts.ratio_mode,
+        Message::OptionsRatioModeChanged,
+        true,
+        true,
+    );
+
+    let mut right_items: Vec<Element<'_, Message>> = vec![
+        text("Seeding Ratio")
+            .size(12)
+            .style(|t: &iced::Theme| iced::widget::text::Style {
+                color: Some(t.palette().text.scale_alpha(0.45)),
+            })
+            .into(),
+        ratio_ctrl,
+    ];
+
+    if opts.ratio_mode == 1 {
+        let custom_row = row![
+            text("Custom ratio").width(Length::Fill),
+            text_input("ratio", &opts.ratio_limit_val)
+                .on_input(Message::OptionsRatioLimitChanged)
+                .on_submit(Message::OptionsRatioLimitSubmitted)
+                .width(field_w)
+                .padding([10, 14])
+                .style(crate::theme::m3_text_input),
+        ]
+        .align_y(iced::Center);
+        right_items.push(custom_row.into());
+    }
+
+    let right_card = container(iced::widget::column(right_items).spacing(12))
+        .style(crate::theme::m3_card)
+        .padding([12, 16])
+        .width(Length::FillPortion(1));
+
+    container(row![left_card, right_card].spacing(12).padding([12, 16]))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
 
 #[cfg(test)]

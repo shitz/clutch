@@ -26,7 +26,7 @@ mod view;
 use uuid::Uuid;
 
 use crate::profile::{ProfileStore, ThemeConfig};
-use crate::rpc::SessionInfo;
+use crate::rpc::SessionData;
 
 pub use self::state::SettingsScreen;
 
@@ -68,8 +68,16 @@ pub enum Message {
     DraftPortChanged(String),
     DraftUsernameChanged(String),
     DraftPasswordChanged(String),
+    DraftAltSpeedDownChanged(String),
+    DraftAltSpeedUpChanged(String),
+    DraftSpeedLimitDownEnabledToggled(bool),
+    DraftSpeedLimitDownChanged(String),
+    DraftSpeedLimitUpEnabledToggled(bool),
+    DraftSpeedLimitUpChanged(String),
+    DraftRatioLimitChanged(String),
+    DraftRatioLimitEnabledToggled(bool),
     TestConnectionClicked,
-    TestConnectionResult(Result<SessionInfo, String>),
+    TestConnectionResult(Result<SessionData, String>),
     SaveClicked,
     RevertClicked,
 
@@ -112,6 +120,12 @@ pub enum SettingsResult {
     },
     /// A profile was saved that is the currently active connection; caller must reconnect.
     ActiveProfileSaved {
+        profile_id: Uuid,
+        store: ProfileStore,
+    },
+    /// Active profile saved but only bandwidth/seeding fields changed — no reconnect needed.
+    /// The caller should push the new settings to the daemon via `session-set`.
+    ActiveProfileBandwidthSaved {
         profile_id: Uuid,
         store: ProfileStore,
     },

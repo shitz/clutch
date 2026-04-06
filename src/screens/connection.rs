@@ -47,6 +47,12 @@ pub struct ConnectSuccess {
     pub profile_id: Option<Uuid>,
     pub creds: TransmissionCredentials,
     pub session_id: String,
+    /// Whether alt-speed (turtle mode) was enabled on the daemon at connect time.
+    pub alt_speed_enabled: bool,
+    /// Alt-speed download ceiling KB/s from the daemon.
+    pub alt_speed_down_kbps: u32,
+    /// Alt-speed upload ceiling KB/s from the daemon.
+    pub alt_speed_up_kbps: u32,
 }
 
 // ── Message ───────────────────────────────────────────────────────────────────
@@ -68,7 +74,7 @@ pub enum Message {
     /// Quick-connect "Connect" button.
     ConnectClicked,
     /// Result of a connection probe.
-    ProbeResult(Result<crate::rpc::SessionInfo, String>),
+    ProbeResult(Result<crate::rpc::SessionData, String>),
     /// User clicked "Manage / Add Profile" on the launchpad.
     ManageProfilesClicked,
     /// Initiate a probe using pre-built credentials (set by app-level intercept).
@@ -571,6 +577,9 @@ impl ConnectionScreen {
                     profile_id: self.connecting_profile_id,
                     creds,
                     session_id: info.session_id,
+                    alt_speed_enabled: info.alt_speed_enabled,
+                    alt_speed_down_kbps: info.alt_speed_down,
+                    alt_speed_up_kbps: info.alt_speed_up,
                 };
                 self.is_connecting = false;
                 self.connecting_profile_id = None;

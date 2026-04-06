@@ -99,6 +99,32 @@ pub struct ConnectionProfile {
     /// value, avoiding sub-table serialization issues.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encrypted_password: Option<String>,
+    /// Standard global download speed ceiling in KB/s.
+    #[serde(default)]
+    pub speed_limit_down: u32,
+    /// Whether the standard global download limit is active.
+    #[serde(default)]
+    pub speed_limit_down_enabled: bool,
+    /// Standard global upload speed ceiling in KB/s.
+    #[serde(default)]
+    pub speed_limit_up: u32,
+    /// Whether the standard global upload limit is active.
+    #[serde(default)]
+    pub speed_limit_up_enabled: bool,
+    /// Alternative (Turtle Mode) download speed ceiling in KB/s.
+    /// Set to 0 to leave the daemon's existing value unchanged.
+    #[serde(default)]
+    pub alt_speed_down: u32,
+    /// Alternative (Turtle Mode) upload speed ceiling in KB/s.
+    /// Set to 0 to leave the daemon's existing value unchanged.
+    #[serde(default)]
+    pub alt_speed_up: u32,
+    /// Global seed-ratio limit: stop seeding when upload/download ratio reaches this value.
+    #[serde(default)]
+    pub ratio_limit: f64,
+    /// Whether to enable the global seed-ratio limit on this profile.
+    #[serde(default)]
+    pub ratio_limit_enabled: bool,
 }
 
 impl ConnectionProfile {
@@ -111,6 +137,14 @@ impl ConnectionProfile {
             port: 9091,
             username: None,
             encrypted_password: None,
+            speed_limit_down: 0,
+            speed_limit_down_enabled: false,
+            speed_limit_up: 0,
+            speed_limit_up_enabled: false,
+            alt_speed_down: 0,
+            alt_speed_up: 0,
+            ratio_limit: 0.0,
+            ratio_limit_enabled: false,
         }
     }
 

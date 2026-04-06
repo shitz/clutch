@@ -320,8 +320,11 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
         // Disconnect / OpenSettingsClicked are intercepted by the parent.
         Message::Disconnect | Message::OpenSettingsClicked => Task::none(),
 
-        // FileWantedSettled is intercepted by MainScreen and forwarded to the inspector.
-        Message::FileWantedSettled(..) => Task::none(),
+        // These are intercepted by MainScreen before reaching here.
+        Message::FileWantedSettled(..)
+        | Message::SessionDataLoaded(..)
+        | Message::BandwidthSaved(..)
+        | Message::TurtleModeToggled => Task::none(),
 
         // ── Add-dialog keyboard ───────────────────────────────────────────────
         Message::DialogTabKeyPressed { shift } => match &state.add_dialog {

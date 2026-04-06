@@ -29,7 +29,7 @@ pub mod worker;
 
 use tokio::sync::mpsc;
 
-use crate::rpc::{ConnectionParams, RpcWork, TorrentData, TransmissionCredentials};
+use crate::rpc::{ConnectionParams, RpcWork, SessionData, TorrentData, TransmissionCredentials};
 
 use add_dialog::AddDialogState;
 use sort::{SortColumn, SortDir};
@@ -77,6 +77,12 @@ pub enum Message {
     /// Fired when a SetFileWanted RPC completes (success or failure).
     /// Carries the file indices so the inspector can clear pending_wanted.
     FileWantedSettled(bool, Vec<usize>),
+    /// Fired when a periodic session-get poll completes.
+    SessionDataLoaded(Result<SessionData, String>),
+    /// Fired when a torrent-set bandwidth call completes.
+    BandwidthSaved(Result<(), String>),
+    /// Fired by the toolbar turtle button — intercepted by main_screen.
+    TurtleModeToggled,
     // Escalated to parent — intercepted by MainScreen before reaching update()
     Disconnect,
     // Escalated to app — opens Settings screen

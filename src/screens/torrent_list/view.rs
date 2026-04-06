@@ -23,7 +23,7 @@ use crate::format::{format_eta, format_size, format_speed};
 use crate::rpc::TorrentData;
 use crate::theme::{
     ICON_ADD, ICON_DELETE, ICON_DOWNLOAD, ICON_LINK, ICON_LOGOUT, ICON_PAUSE, ICON_PLAY,
-    ICON_SETTINGS, ICON_UPLOAD, icon, progress_bar_style,
+    ICON_SETTINGS, ICON_SPEED, ICON_UPLOAD, icon, progress_bar_style,
 };
 
 use super::add_dialog::{AddDialogState, view_add_dialog};
@@ -53,9 +53,13 @@ fn status_label(status: i32) -> &'static str {
     }
 }
 
-pub fn view(state: &TorrentListScreen, theme_mode: crate::app::ThemeMode) -> Element<'_, Message> {
+pub fn view(
+    state: &TorrentListScreen,
+    theme_mode: crate::app::ThemeMode,
+    alt_speed_enabled: bool,
+) -> Element<'_, Message> {
     // ── Toolbar ───────────────────────────────────────────────────────────────
-    let toolbar = view_normal_toolbar(state, theme_mode);
+    let toolbar = view_normal_toolbar(state, theme_mode, alt_speed_enabled);
 
     // ── Inline error banner ───────────────────────────────────────────────────
     let error_row: Element<Message> = if let Some(err) = &state.error {
@@ -289,6 +293,7 @@ fn view_delete_dialog(name: &str, del_local: bool) -> Element<'_, Message> {
 fn view_normal_toolbar(
     state: &TorrentListScreen,
     _theme_mode: crate::app::ThemeMode,
+    alt_speed_enabled: bool,
 ) -> Element<'_, Message> {
     let selected = state
         .selected_id
@@ -355,6 +360,14 @@ fn view_normal_toolbar(
     .into();
 
     let group3: Element<Message> = row![
+        tooltip(
+            crate::theme::active_icon_button(icon(ICON_SPEED), alt_speed_enabled)
+                .on_press(Message::TurtleModeToggled),
+            text("Turtle Mode"),
+            tooltip::Position::Bottom,
+        )
+        .gap(6)
+        .style(crate::theme::m3_tooltip),
         tooltip(
             crate::theme::icon_button(icon(ICON_SETTINGS)).on_press(Message::OpenSettingsClicked),
             text("Settings"),

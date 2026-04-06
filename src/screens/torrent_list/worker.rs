@@ -53,6 +53,12 @@ pub fn rpc_worker_stream() -> impl iced::futures::Stream<Item = Message> {
                 crate::rpc::RpcResult::FileWantedSet(r, indices) => {
                     Message::FileWantedSettled(r.is_ok(), indices)
                 }
+                crate::rpc::RpcResult::SessionDataLoaded(r) => {
+                    Message::SessionDataLoaded(r.map_err(|e| e.to_string()))
+                }
+                crate::rpc::RpcResult::BandwidthSet(r) => {
+                    Message::BandwidthSaved(r.map_err(|e| e.to_string()))
+                }
             };
             let _ = output.send(msg).await;
         }

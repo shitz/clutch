@@ -35,6 +35,22 @@ pub struct ProfileDraft {
     pub has_saved_password: bool,
     pub test_result: Option<TestResult>,
     pub testing: bool,
+    /// Standard global download limit (KB/s) — empty means not set.
+    pub speed_limit_down: String,
+    /// Whether the standard global download limit is active.
+    pub speed_limit_down_enabled: bool,
+    /// Standard global upload limit (KB/s) — empty means not set.
+    pub speed_limit_up: String,
+    /// Whether the standard global upload limit is active.
+    pub speed_limit_up_enabled: bool,
+    /// Alternative download ceiling (KB/s) — empty string means "not set" (0).
+    pub alt_speed_down: String,
+    /// Alternative upload ceiling (KB/s) — empty string means "not set" (0).
+    pub alt_speed_up: String,
+    /// Seed-ratio limit value — empty string means "not set" (0.0).
+    pub ratio_limit: String,
+    /// Whether to enable the global seed-ratio limit.
+    pub ratio_limit_enabled: bool,
 }
 
 /// Result of the last Test Connection probe.
@@ -57,6 +73,34 @@ impl ProfileDraft {
             has_saved_password: profile.encrypted_password.is_some(),
             test_result: None,
             testing: false,
+            speed_limit_down: if profile.speed_limit_down == 0 {
+                String::new()
+            } else {
+                profile.speed_limit_down.to_string()
+            },
+            speed_limit_down_enabled: profile.speed_limit_down_enabled,
+            speed_limit_up: if profile.speed_limit_up == 0 {
+                String::new()
+            } else {
+                profile.speed_limit_up.to_string()
+            },
+            speed_limit_up_enabled: profile.speed_limit_up_enabled,
+            alt_speed_down: if profile.alt_speed_down == 0 {
+                String::new()
+            } else {
+                profile.alt_speed_down.to_string()
+            },
+            alt_speed_up: if profile.alt_speed_up == 0 {
+                String::new()
+            } else {
+                profile.alt_speed_up.to_string()
+            },
+            ratio_limit: if profile.ratio_limit == 0.0 {
+                String::new()
+            } else {
+                format!("{:.2}", profile.ratio_limit)
+            },
+            ratio_limit_enabled: profile.ratio_limit_enabled,
         }
     }
 
@@ -72,6 +116,14 @@ impl ProfileDraft {
             has_saved_password: false,
             test_result: None,
             testing: false,
+            speed_limit_down: String::new(),
+            speed_limit_down_enabled: false,
+            speed_limit_up: String::new(),
+            speed_limit_up_enabled: false,
+            alt_speed_down: String::new(),
+            alt_speed_up: String::new(),
+            ratio_limit: String::new(),
+            ratio_limit_enabled: false,
         }
     }
 

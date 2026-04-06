@@ -254,6 +254,14 @@ impl SettingsScreen {
                     } else {
                         Some(draft.username.clone())
                     };
+                    p.speed_limit_down = draft.speed_limit_down.parse().unwrap_or(0);
+                    p.speed_limit_down_enabled = draft.speed_limit_down_enabled;
+                    p.speed_limit_up = draft.speed_limit_up.parse().unwrap_or(0);
+                    p.speed_limit_up_enabled = draft.speed_limit_up_enabled;
+                    p.alt_speed_down = draft.alt_speed_down.parse().unwrap_or(0);
+                    p.alt_speed_up = draft.alt_speed_up.parse().unwrap_or(0);
+                    p.ratio_limit = draft.ratio_limit.parse().unwrap_or(0.0);
+                    p.ratio_limit_enabled = draft.ratio_limit_enabled;
                     // Clear encrypted password if user explicitly set an empty password.
                     if draft.password_changed && draft.password.is_empty() {
                         p.encrypted_password = None;
@@ -264,6 +272,20 @@ impl SettingsScreen {
                     self.draft = Some(ProfileDraft::from_profile(p));
                 }
                 let store = self.build_store_snapshot();
+                // Before the `SaveWithPassword` shortcut: determine if only bandwidth
+                // fields changed so we can avoid a full reconnect later.
+                let connection_changed = {
+                    let port: u16 = draft.port.parse().unwrap_or(9091);
+                    self.profiles
+                        .iter()
+                        .find(|p| p.id == id)
+                        .map(|p| {
+                            p.host != draft.host
+                                || p.port != port
+                                || p.username.as_deref().unwrap_or("") != draft.username
+                        })
+                        .unwrap_or(true)
+                };
                 // If the user entered a new non-empty password, hand it off to app::update
                 // for passphrase-protected encryption rather than storing it directly.
                 if draft.password_changed && !draft.password.is_empty() {
@@ -286,9 +308,16 @@ impl SettingsScreen {
                     Message::RevertClicked
                 });
                 let result = if self.active_profile_id == Some(id) {
-                    SettingsResult::ActiveProfileSaved {
-                        profile_id: id,
-                        store,
+                    if connection_changed || draft.password_changed {
+                        SettingsResult::ActiveProfileSaved {
+                            profile_id: id,
+                            store,
+                        }
+                    } else {
+                        SettingsResult::ActiveProfileBandwidthSaved {
+                            profile_id: id,
+                            store,
+                        }
                     }
                 } else {
                     SettingsResult::StoreUpdated(store)
@@ -367,6 +396,76 @@ impl SettingsScreen {
 
             // Enter has no primary action in the settings screen (non-goal).
             Message::EnterPressed => (Task::none(), None),
+
+            // ── Per-draft bandwidth limits (Connections tab) ──────────────────
+            Message::DraftSpeedLimitDownEnabledToggled(v) => {
+                if let Some(d) = &mut self.draft {
+                    d.speed_limit_down_enabled = v;
+                    self.dirty = true;
+                }
+                (Task::none(), None)
+            }
+            Message::DraftSpeedLimitDownChanged(v) => {
+                if (v.is_empty() || v.chars().all(|c| c.is_ascii_digit()))
+                    && let Some(d) = &mut self.draft
+                {
+                    d.speed_limit_down = v;
+                    self.dirty = true;
+                }
+                (Task::none(), None)
+            }
+            Message::DraftSpeedLimitUpEnabledToggled(v) => {
+                if let Some(d) = &mut self.draft {
+                    d.speed_limit_up_enabled = v;
+                    self.dirty = true;
+                }
+                (Task::none(), None)
+            }
+            Message::DraftSpeedLimitUpChanged(v) => {
+                if (v.is_empty() || v.chars().all(|c| c.is_ascii_digit()))
+                    && let Some(d) = &mut self.draft
+                {
+                    d.speed_limit_up = v;
+                    self.dirty = true;
+                }
+                (Task::none(), None)
+            }
+            Message::DraftAltSpeedDownChanged(v) => {
+                if (v.is_empty() || v.chars().all(|c| c.is_ascii_digit()))
+                    && let Some(d) = &mut self.draft
+                {
+                    d.alt_speed_down = v;
+                    self.dirty = true;
+                }
+                (Task::none(), None)
+            }
+            Message::DraftAltSpeedUpChanged(v) => {
+                if (v.is_empty() || v.chars().all(|c| c.is_ascii_digit()))
+                    && let Some(d) = &mut self.draft
+                {
+                    d.alt_speed_up = v;
+                    self.dirty = true;
+                }
+                (Task::none(), None)
+            }
+            Message::DraftRatioLimitEnabledToggled(v) => {
+                if let Some(d) = &mut self.draft {
+                    d.ratio_limit_enabled = v;
+                    self.dirty = true;
+                }
+                (Task::none(), None)
+            }
+            Message::DraftRatioLimitChanged(v) => {
+                let dot_count = v.chars().filter(|c| *c == '.').count();
+                if (v.is_empty()
+                    || (v.chars().all(|c| c.is_ascii_digit() || c == '.') && dot_count <= 1))
+                    && let Some(d) = &mut self.draft
+                {
+                    d.ratio_limit = v;
+                    self.dirty = true;
+                }
+                (Task::none(), None)
+            }
         }
     }
 }

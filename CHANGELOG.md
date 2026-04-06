@@ -9,8 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Selective file downloading: when adding a `.torrent` file, a file list is shown with per-file
-  checkboxes.
+- Turtle Mode: toolbar speed-icon toggle button highlights blue when Transmission's
+  alternative speed limits are active.
+- Alternative Speed Limits per connection profile: each saved profile stores its own
+  alternative download and upload ceilings (KB/s), configured in the Connections settings tab.
+- Inspector Options tab (5th tab): per-torrent switches and fields for Limit Download,
+  Limit Upload, Stop Seeding at Ratio, and Honor Global Speed Limits. When "Honor Global
+  Speed Limits" is ON, the torrent respects whichever session-level limit is active
+  (standard when turtle mode is off; alternative when turtle mode is on). When OFF, the
+  torrent bypasses all global limits and is capped only by its own per-torrent limits.
 - Inspector Files tab now has per-file download checkboxes.
 - Keyboard Tab / Shift-Tab cycles focus through all text inputs on the active screen or
   dialog, wrapping around at the ends.

@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use iced::widget::{
-    Space, button, column, container, opaque, row, scrollable, stack, text, text_input, tooltip,
+    Space, button, column, container, opaque, row, scrollable, stack, text, text_input, toggler,
+    tooltip,
 };
 use iced::{Alignment, ContentFit, Element, Length};
 
@@ -512,8 +513,146 @@ impl SettingsScreen {
                 .spacing(12)
                 .align_y(Alignment::Center),
         ]
-        .spacing(12)
-        .padding(24);
+        .spacing(12);
+
+        let connection_card = container(
+            column![
+                text("Connection Details")
+                    .size(13)
+                    .style(|t: &iced::Theme| iced::widget::text::Style {
+                        color: Some(t.palette().text.scale_alpha(0.5)),
+                    }),
+                form,
+            ]
+            .spacing(12),
+        )
+        .style(crate::theme::m3_card)
+        .padding(16)
+        .width(Length::Fill);
+
+        // ── Bandwidth card ────────────────────────────────────────────────────
+        let field_w = Length::Fixed(100.0);
+
+        let sub_label = |s: &'static str| {
+            text(s)
+                .size(12)
+                .style(|t: &iced::Theme| iced::widget::text::Style {
+                    color: Some(t.palette().text.scale_alpha(0.45)),
+                })
+        };
+        let tog_gap = || Space::new().width(Length::Fixed(8.0));
+
+        // Standard Global Limits ─────────────────────────────────────────────
+        let dl_std_input = {
+            let inp = text_input("", &draft.speed_limit_down)
+                .width(field_w)
+                .padding([12, 16])
+                .style(crate::theme::m3_text_input);
+            if draft.speed_limit_down_enabled {
+                inp.on_input(Message::DraftSpeedLimitDownChanged)
+            } else {
+                inp
+            }
+        };
+        let std_dl_row = row![
+            toggler(draft.speed_limit_down_enabled)
+                .on_toggle(Message::DraftSpeedLimitDownEnabledToggled)
+                .width(Length::Shrink),
+            tog_gap(),
+            text("Limit Download (KB/s)").width(Length::Fill),
+            dl_std_input,
+        ]
+        .align_y(Alignment::Center);
+
+        let ul_std_input = {
+            let inp = text_input("", &draft.speed_limit_up)
+                .width(field_w)
+                .padding([12, 16])
+                .style(crate::theme::m3_text_input);
+            if draft.speed_limit_up_enabled {
+                inp.on_input(Message::DraftSpeedLimitUpChanged)
+            } else {
+                inp
+            }
+        };
+        let std_ul_row = row![
+            toggler(draft.speed_limit_up_enabled)
+                .on_toggle(Message::DraftSpeedLimitUpEnabledToggled)
+                .width(Length::Shrink),
+            tog_gap(),
+            text("Limit Upload (KB/s)").width(Length::Fill),
+            ul_std_input,
+        ]
+        .align_y(Alignment::Center);
+
+        // Alternative Limits (Turtle Mode) ───────────────────────────────────
+        let alt_dl_row = row![
+            text("Download (KB/s)").width(Length::Fill),
+            text_input("", &draft.alt_speed_down)
+                .on_input(Message::DraftAltSpeedDownChanged)
+                .width(field_w)
+                .padding([12, 16])
+                .style(crate::theme::m3_text_input),
+        ]
+        .align_y(Alignment::Center);
+
+        let alt_ul_row = row![
+            text("Upload (KB/s)").width(Length::Fill),
+            text_input("", &draft.alt_speed_up)
+                .on_input(Message::DraftAltSpeedUpChanged)
+                .width(field_w)
+                .padding([12, 16])
+                .style(crate::theme::m3_text_input),
+        ]
+        .align_y(Alignment::Center);
+
+        // Seeding ─────────────────────────────────────────────────────────────
+        let ratio_input = {
+            let inp = text_input("", &draft.ratio_limit)
+                .width(field_w)
+                .padding([12, 16])
+                .style(crate::theme::m3_text_input);
+            if draft.ratio_limit_enabled {
+                inp.on_input(Message::DraftRatioLimitChanged)
+            } else {
+                inp
+            }
+        };
+        let ratio_row = row![
+            toggler(draft.ratio_limit_enabled)
+                .on_toggle(Message::DraftRatioLimitEnabledToggled)
+                .width(Length::Shrink),
+            tog_gap(),
+            text("Stop Seeding at Ratio").width(Length::Fill),
+            ratio_input,
+        ]
+        .align_y(Alignment::Center);
+
+        let std_section =
+            column![sub_label("Standard Global Limits"), std_dl_row, std_ul_row,].spacing(10);
+        let alt_section = column![
+            sub_label("Alternative Limits (Turtle Mode)"),
+            alt_dl_row,
+            alt_ul_row,
+        ]
+        .spacing(10);
+        let seeding_section = column![sub_label("Seeding"), ratio_row,].spacing(10);
+
+        let bandwidth_card = container(
+            column![
+                text("Bandwidth").size(16).font(iced::Font {
+                    weight: iced::font::Weight::Bold,
+                    ..iced::Font::DEFAULT
+                }),
+                std_section,
+                alt_section,
+                seeding_section,
+            ]
+            .spacing(14),
+        )
+        .style(crate::theme::m3_card)
+        .padding(16)
+        .width(Length::Fill);
 
         let action_row = row![Space::new().width(Length::Fill), revert_btn, save_btn,]
             .spacing(8)
@@ -524,7 +663,11 @@ impl SettingsScreen {
                 left: 16.0,
             });
 
-        column![form, Space::new().height(Length::Fill), action_row]
+        let cards = column![connection_card, bandwidth_card]
+            .spacing(12)
+            .padding([16, 16]);
+
+        column![scrollable(cards).height(Length::Fill), action_row,]
             .height(Length::Fill)
             .into()
     }

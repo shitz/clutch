@@ -14,7 +14,7 @@
 
 //! Shared across the RPC layer and the UI modules. Carries no transport logic.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // ── Connection types ──────────────────────────────────────────────────────────
 
@@ -58,9 +58,69 @@ impl ConnectionParams {
 }
 
 /// Result of a successful `session-get` probe.
-#[derive(Debug, Clone)]
-pub struct SessionInfo {
+///
+/// Contains the session ID and current alternative speed limit settings
+/// reported by the daemon.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SessionData {
     pub session_id: String,
+    #[serde(rename = "alt-speed-enabled", default)]
+    pub alt_speed_enabled: bool,
+    #[serde(rename = "alt-speed-down", default)]
+    pub alt_speed_down: u32,
+    #[serde(rename = "alt-speed-up", default)]
+    pub alt_speed_up: u32,
+}
+
+/// Arguments for a `session-set` RPC call. Only `Some` fields are serialized.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct SessionSetArgs {
+    #[serde(rename = "alt-speed-enabled", skip_serializing_if = "Option::is_none")]
+    pub alt_speed_enabled: Option<bool>,
+    #[serde(rename = "alt-speed-down", skip_serializing_if = "Option::is_none")]
+    pub alt_speed_down: Option<u32>,
+    #[serde(rename = "alt-speed-up", skip_serializing_if = "Option::is_none")]
+    pub alt_speed_up: Option<u32>,
+    #[serde(
+        rename = "speed-limit-down-enabled",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub speed_limit_down_enabled: Option<bool>,
+    #[serde(rename = "speed-limit-down", skip_serializing_if = "Option::is_none")]
+    pub speed_limit_down: Option<u32>,
+    #[serde(
+        rename = "speed-limit-up-enabled",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub speed_limit_up_enabled: Option<bool>,
+    #[serde(rename = "speed-limit-up", skip_serializing_if = "Option::is_none")]
+    pub speed_limit_up: Option<u32>,
+    #[serde(rename = "seedRatioLimit", skip_serializing_if = "Option::is_none")]
+    pub seed_ratio_limit: Option<f64>,
+    #[serde(rename = "seedRatioLimited", skip_serializing_if = "Option::is_none")]
+    pub seed_ratio_limited: Option<bool>,
+}
+
+/// Arguments for a `torrent-set` bandwidth call. Only `Some` fields are serialized.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct TorrentBandwidthArgs {
+    #[serde(rename = "downloadLimited", skip_serializing_if = "Option::is_none")]
+    pub download_limited: Option<bool>,
+    #[serde(rename = "downloadLimit", skip_serializing_if = "Option::is_none")]
+    pub download_limit: Option<u64>,
+    #[serde(rename = "uploadLimited", skip_serializing_if = "Option::is_none")]
+    pub upload_limited: Option<bool>,
+    #[serde(rename = "uploadLimit", skip_serializing_if = "Option::is_none")]
+    pub upload_limit: Option<u64>,
+    #[serde(rename = "seedRatioLimit", skip_serializing_if = "Option::is_none")]
+    pub seed_ratio_limit: Option<f64>,
+    #[serde(rename = "seedRatioMode", skip_serializing_if = "Option::is_none")]
+    pub seed_ratio_mode: Option<u8>,
+    #[serde(
+        rename = "honorsSessionLimits",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub honors_session_limits: Option<bool>,
 }
 
 // ── Torrent data ──────────────────────────────────────────────────────────────
@@ -142,6 +202,21 @@ pub struct TorrentData {
     pub tracker_stats: Vec<TrackerStat>,
     #[serde(default)]
     pub peers: Vec<PeerInfo>,
+    // ── Per-torrent bandwidth limits ──────────────────────────────────────────
+    #[serde(rename = "downloadLimited", default)]
+    pub download_limited: bool,
+    #[serde(rename = "downloadLimit", default)]
+    pub download_limit: u64,
+    #[serde(rename = "uploadLimited", default)]
+    pub upload_limited: bool,
+    #[serde(rename = "uploadLimit", default)]
+    pub upload_limit: u64,
+    #[serde(rename = "seedRatioLimit", default)]
+    pub seed_ratio_limit: f64,
+    #[serde(rename = "seedRatioMode", default)]
+    pub seed_ratio_mode: u8,
+    #[serde(rename = "honorsSessionLimits", default = "default_true")]
+    pub honors_session_limits: bool,
 }
 
 // ── Add-torrent payload ───────────────────────────────────────────────────────

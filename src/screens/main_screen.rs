@@ -37,8 +37,8 @@ use iced::widget::{column, container};
 use iced::{Element, Length, Subscription, Task};
 
 use crate::app::ThemeMode;
-use crate::rpc::{RpcWork, TransmissionCredentials};
-use crate::screens::inspector::{self, InspectorScreen};
+use crate::rpc::{RpcWork, SessionData, TorrentBandwidthArgs, TransmissionCredentials};
+use crate::screens::inspector::{self, InspectorOptionsState, InspectorScreen};
 use crate::screens::torrent_list::{self, TorrentListScreen};
 
 // -- Message ------------------------------------------------------------------
@@ -51,6 +51,10 @@ pub enum Message {
     Disconnect,
     /// Settings gear icon — handled by `app::update`.
     OpenSettingsClicked,
+    /// Toolbar turtle-mode button pressed — escalated to `app::update`.
+    TurtleModeToggled,
+    /// Fresh session data from a periodic `session-get` poll — escalated to `app::update`.
+    SessionDataLoaded(SessionData),
 }
 
 // -- State --------------------------------------------------------------------
@@ -65,6 +69,8 @@ pub struct MainScreen {
     pub profile_name: Option<String>,
     /// Daemon poll interval in seconds, from GeneralSettings.
     pub refresh_interval: u8,
+    /// Counts torrent-poll ticks to drive the periodic `session-get` refresh.
+    session_poll_ticks: u8,
 }
 
 impl MainScreen {
@@ -84,6 +90,7 @@ impl MainScreen {
             connect_label,
             profile_name,
             refresh_interval,
+            session_poll_ticks: 0,
         }
     }
 
@@ -108,6 +115,33 @@ impl MainScreen {
                 Task::done(Message::OpenSettingsClicked)
             }
 
+            // Turtle-mode toggle button: bubble to app so it can do the session-set.
+            Message::List(torrent_list::Message::TurtleModeToggled) => {
+                Task::done(Message::TurtleModeToggled)
+            }
+
+            // Successful session-get response: bubble to app to update AppState.
+            Message::List(torrent_list::Message::SessionDataLoaded(Ok(data))) => {
+                Task::done(Message::SessionDataLoaded(data))
+            }
+            // Error on session-get poll: ignore silently (transient network blip).
+            Message::List(torrent_list::Message::SessionDataLoaded(Err(e))) => {
+                tracing::debug!(error = %e, "periodic session-get failed; ignoring");
+                Task::none()
+            }
+
+            // Intercept each Tick to drive the periodic session-get poll.
+            Message::List(torrent_list::Message::Tick) => {
+                let threshold = (10_u8 / self.refresh_interval.max(1)).max(1);
+                self.session_poll_ticks = self.session_poll_ticks.saturating_add(1);
+                if self.session_poll_ticks >= threshold {
+                    self.session_poll_ticks = 0;
+                    self.list
+                        .enqueue(RpcWork::SessionGet(self.list.params.clone()));
+                }
+                torrent_list::update(&mut self.list, torrent_list::Message::Tick).map(Message::List)
+            }
+
             // Intercept TorrentSelected so we can reset the inspector tab.
             Message::List(torrent_list::Message::TorrentSelected(id)) => {
                 let prev = self.list.selected_id;
@@ -121,6 +155,10 @@ impl MainScreen {
                     self.inspector.active_tab = inspector::ActiveTab::General;
                     // Clear stale file-wanted overrides from the previous selection.
                     self.inspector.pending_wanted.clear();
+                    // Reset Options draft to match the newly selected torrent.
+                    if let Some(torrent) = self.list.selected_torrent() {
+                        self.inspector.options = InspectorOptionsState::from_torrent(torrent);
+                    }
                 }
                 task
             }
@@ -154,6 +192,183 @@ impl MainScreen {
                     torrent_id,
                     file_indices: vec![file_index as i64],
                     wanted,
+                });
+                Task::none()
+            }
+
+            // Intercept Options toggle/submit messages to immediately apply each change via RPC.
+
+            // Download limit toggle: update state + send download_limited + download_limit.
+            Message::Inspector(inspector::Message::OptionsDownloadLimitToggled(v)) => {
+                self.inspector.options.download_limited = v;
+                let Some(torrent_id) = self.list.selected_id else {
+                    return Task::none();
+                };
+                let dl_limit: u64 = self
+                    .inspector
+                    .options
+                    .download_limit_val
+                    .parse()
+                    .unwrap_or(0);
+                let args = TorrentBandwidthArgs {
+                    download_limited: Some(v),
+                    download_limit: Some(dl_limit),
+                    ..Default::default()
+                };
+                self.list.enqueue(RpcWork::TorrentSetBandwidth {
+                    params: self.list.params.clone(),
+                    torrent_id,
+                    args,
+                });
+                Task::none()
+            }
+
+            // Upload limit toggle: update state + send upload_limited + upload_limit.
+            Message::Inspector(inspector::Message::OptionsUploadLimitToggled(v)) => {
+                self.inspector.options.upload_limited = v;
+                let Some(torrent_id) = self.list.selected_id else {
+                    return Task::none();
+                };
+                let ul_limit: u64 = self.inspector.options.upload_limit_val.parse().unwrap_or(0);
+                let args = TorrentBandwidthArgs {
+                    upload_limited: Some(v),
+                    upload_limit: Some(ul_limit),
+                    ..Default::default()
+                };
+                self.list.enqueue(RpcWork::TorrentSetBandwidth {
+                    params: self.list.params.clone(),
+                    torrent_id,
+                    args,
+                });
+                Task::none()
+            }
+
+            // Ratio mode segmented control: update state + immediately enqueue RPC.
+            Message::Inspector(inspector::Message::OptionsRatioModeChanged(v)) => {
+                self.inspector.options.ratio_mode = v;
+                let Some(torrent_id) = self.list.selected_id else {
+                    return Task::none();
+                };
+                let ratio_limit: f64 = self
+                    .inspector
+                    .options
+                    .ratio_limit_val
+                    .parse()
+                    .unwrap_or(0.0);
+                let args = TorrentBandwidthArgs {
+                    seed_ratio_mode: Some(v),
+                    seed_ratio_limit: Some(ratio_limit),
+                    ..Default::default()
+                };
+                self.list.enqueue(RpcWork::TorrentSetBandwidth {
+                    params: self.list.params.clone(),
+                    torrent_id,
+                    args,
+                });
+                Task::none()
+            }
+
+            // Honor global limits toggle: update state + send full bandwidth args so that
+            // per-torrent limits take effect immediately when the torrent opts out of globals.
+            Message::Inspector(inspector::Message::OptionsHonorGlobalToggled(v)) => {
+                self.inspector.options.honors_session_limits = v;
+                let Some(torrent_id) = self.list.selected_id else {
+                    return Task::none();
+                };
+                let dl_limit: u64 = self
+                    .inspector
+                    .options
+                    .download_limit_val
+                    .parse()
+                    .unwrap_or(0);
+                let ul_limit: u64 = self.inspector.options.upload_limit_val.parse().unwrap_or(0);
+                let args = TorrentBandwidthArgs {
+                    honors_session_limits: Some(v),
+                    download_limited: Some(self.inspector.options.download_limited),
+                    download_limit: Some(dl_limit),
+                    upload_limited: Some(self.inspector.options.upload_limited),
+                    upload_limit: Some(ul_limit),
+                    ..Default::default()
+                };
+                self.list.enqueue(RpcWork::TorrentSetBandwidth {
+                    params: self.list.params.clone(),
+                    torrent_id,
+                    args,
+                });
+                Task::none()
+            }
+
+            // Text submit: apply limit only if the corresponding toggle is enabled.
+            Message::Inspector(inspector::Message::OptionsDownloadLimitSubmitted) => {
+                let Some(torrent_id) = self.list.selected_id else {
+                    return Task::none();
+                };
+                if !self.inspector.options.download_limited {
+                    return Task::none();
+                }
+                let dl_limit: u64 = self
+                    .inspector
+                    .options
+                    .download_limit_val
+                    .parse()
+                    .unwrap_or(0);
+                let args = TorrentBandwidthArgs {
+                    download_limited: Some(true),
+                    download_limit: Some(dl_limit),
+                    ..Default::default()
+                };
+                self.list.enqueue(RpcWork::TorrentSetBandwidth {
+                    params: self.list.params.clone(),
+                    torrent_id,
+                    args,
+                });
+                Task::none()
+            }
+
+            Message::Inspector(inspector::Message::OptionsUploadLimitSubmitted) => {
+                let Some(torrent_id) = self.list.selected_id else {
+                    return Task::none();
+                };
+                if !self.inspector.options.upload_limited {
+                    return Task::none();
+                }
+                let ul_limit: u64 = self.inspector.options.upload_limit_val.parse().unwrap_or(0);
+                let args = TorrentBandwidthArgs {
+                    upload_limited: Some(true),
+                    upload_limit: Some(ul_limit),
+                    ..Default::default()
+                };
+                self.list.enqueue(RpcWork::TorrentSetBandwidth {
+                    params: self.list.params.clone(),
+                    torrent_id,
+                    args,
+                });
+                Task::none()
+            }
+
+            Message::Inspector(inspector::Message::OptionsRatioLimitSubmitted) => {
+                let Some(torrent_id) = self.list.selected_id else {
+                    return Task::none();
+                };
+                // Only apply if in Custom mode (mode 1).
+                if self.inspector.options.ratio_mode != 1 {
+                    return Task::none();
+                }
+                let ratio_limit: f64 = self
+                    .inspector
+                    .options
+                    .ratio_limit_val
+                    .parse()
+                    .unwrap_or(0.0);
+                let args = TorrentBandwidthArgs {
+                    seed_ratio_mode: Some(1),
+                    seed_ratio_limit: Some(ratio_limit),
+                    ..Default::default()
+                };
+                self.list.enqueue(RpcWork::TorrentSetBandwidth {
+                    params: self.list.params.clone(),
+                    torrent_id,
+                    args,
                 });
                 Task::none()
             }
@@ -197,12 +412,15 @@ impl MainScreen {
             }
 
             // Already escalated; app::update handles these.
-            Message::Disconnect | Message::OpenSettingsClicked => Task::none(),
+            Message::Disconnect
+            | Message::OpenSettingsClicked
+            | Message::TurtleModeToggled
+            | Message::SessionDataLoaded(_) => Task::none(),
         }
     }
 
     /// Compose the list and (when a torrent is selected) the inspector panel.
-    pub fn view(&self, theme_mode: ThemeMode) -> Element<'_, Message> {
+    pub fn view(&self, theme_mode: ThemeMode, alt_speed_enabled: bool) -> Element<'_, Message> {
         // Show splash until the first torrent-list response arrives.
         if !self.list.initial_load_done {
             let mut label = format!("Connecting to {}\u{2026}", self.connect_label);
@@ -230,7 +448,8 @@ impl MainScreen {
             .into();
         }
 
-        let list_elem = torrent_list::view(&self.list, theme_mode).map(Message::List);
+        let list_elem =
+            torrent_list::view(&self.list, theme_mode, alt_speed_enabled).map(Message::List);
 
         match self.list.selected_torrent() {
             None => list_elem,
@@ -242,7 +461,7 @@ impl MainScreen {
                         .height(Length::FillPortion(3))
                         .width(Length::Fill),
                     container(inspector_elem)
-                        .height(Length::FillPortion(1))
+                        .height(Length::FillPortion(2))
                         .width(Length::Fill)
                         .style(crate::theme::m3_card),
                 ]
@@ -257,9 +476,10 @@ impl MainScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rpc::TorrentData;
+    use crate::rpc::{RpcWork, TorrentBandwidthArgs, TorrentData};
     use crate::screens::inspector::ActiveTab;
     use crate::screens::torrent_list::Message as TLMsg;
+    use tokio::sync::mpsc;
 
     fn make_screen() -> MainScreen {
         MainScreen::new_with_label(
@@ -331,5 +551,365 @@ mod tests {
             ActiveTab::Peers,
             "tab should stay on Peers after deselection"
         );
+    }
+
+    // ── Bandwidth hierarchy helpers ───────────────────────────────────────────
+
+    /// Create a screen with a live mpsc sender so enqueued work can be inspected.
+    fn make_screen_with_sender() -> (MainScreen, mpsc::Receiver<RpcWork>) {
+        let mut screen = make_screen();
+        let (tx, rx) = mpsc::channel(16);
+        screen.list.sender = Some(tx);
+        (screen, rx)
+    }
+
+    /// A torrent with non-default bandwidth fields for testing.
+    fn make_bandwidth_torrent(id: i64) -> TorrentData {
+        TorrentData {
+            id,
+            name: format!("torrent-{id}"),
+            status: 4,
+            percent_done: 0.5,
+            download_limited: true,
+            download_limit: 800,
+            upload_limited: true,
+            upload_limit: 200,
+            honors_session_limits: true,
+            ..Default::default()
+        }
+    }
+
+    /// Drain all work items from the receiver without blocking.
+    fn drain(rx: &mut mpsc::Receiver<RpcWork>) -> Vec<RpcWork> {
+        let mut items = Vec::new();
+        while let Ok(w) = rx.try_recv() {
+            items.push(w);
+        }
+        items
+    }
+
+    // ── Honor global limits ───────────────────────────────────────────────────
+
+    /// Toggling "Honor Global Limits" off must include the current per-torrent
+    /// download/upload limit state so the daemon can enforce them immediately.
+    #[test]
+    fn honor_global_toggle_off_sends_full_bandwidth_state() {
+        let (mut screen, mut rx) = make_screen_with_sender();
+        screen.list.torrents = vec![make_bandwidth_torrent(1)];
+        let _ = screen.update(Message::List(TLMsg::TorrentSelected(1)));
+
+        let _ = screen.update(Message::Inspector(
+            inspector::Message::OptionsHonorGlobalToggled(false),
+        ));
+
+        let work = drain(&mut rx);
+        let bandwidth_items: Vec<_> = work
+            .into_iter()
+            .filter_map(|w| {
+                if let RpcWork::TorrentSetBandwidth {
+                    torrent_id, args, ..
+                } = w
+                {
+                    Some((torrent_id, args))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(bandwidth_items.len(), 1);
+        let (tid, args) = &bandwidth_items[0];
+        assert_eq!(*tid, 1);
+        assert_eq!(args.honors_session_limits, Some(false));
+        assert_eq!(args.download_limited, Some(true));
+        assert_eq!(args.download_limit, Some(800));
+        assert_eq!(args.upload_limited, Some(true));
+        assert_eq!(args.upload_limit, Some(200));
+    }
+
+    /// Toggling "Honor Global Limits" back on also includes full bandwidth state.
+    #[test]
+    fn honor_global_toggle_on_sends_full_bandwidth_state() {
+        let (mut screen, mut rx) = make_screen_with_sender();
+        let mut torrent = make_bandwidth_torrent(1);
+        torrent.honors_session_limits = false;
+        screen.list.torrents = vec![torrent];
+        let _ = screen.update(Message::List(TLMsg::TorrentSelected(1)));
+
+        let _ = screen.update(Message::Inspector(
+            inspector::Message::OptionsHonorGlobalToggled(true),
+        ));
+
+        let work = drain(&mut rx);
+        let (_, args) = work
+            .into_iter()
+            .find_map(|w| {
+                if let RpcWork::TorrentSetBandwidth {
+                    torrent_id, args, ..
+                } = w
+                {
+                    Some((torrent_id, args))
+                } else {
+                    None
+                }
+            })
+            .expect("should enqueue TorrentSetBandwidth");
+        assert_eq!(args.honors_session_limits, Some(true));
+        assert_eq!(args.download_limited, Some(true));
+        assert_eq!(args.upload_limited, Some(true));
+    }
+
+    // ── Download / upload limit toggles ──────────────────────────────────────
+
+    /// Enabling the download limit toggle sends `downloadLimited=true` plus the
+    /// current value from the text field.
+    #[test]
+    fn download_limit_toggle_on_sends_correct_args() {
+        let (mut screen, mut rx) = make_screen_with_sender();
+        let mut torrent = make_bandwidth_torrent(1);
+        torrent.download_limited = false;
+        screen.list.torrents = vec![torrent];
+        let _ = screen.update(Message::List(TLMsg::TorrentSelected(1)));
+
+        // Simulate the user typing a new value before enabling the toggle.
+        let _ = screen.update(Message::Inspector(
+            inspector::Message::OptionsDownloadLimitChanged("500".to_owned()),
+        ));
+        let _ = screen.update(Message::Inspector(
+            inspector::Message::OptionsDownloadLimitToggled(true),
+        ));
+
+        let work = drain(&mut rx);
+        let (_, args) = work
+            .into_iter()
+            .find_map(|w| {
+                if let RpcWork::TorrentSetBandwidth {
+                    torrent_id, args, ..
+                } = w
+                {
+                    Some((torrent_id, args))
+                } else {
+                    None
+                }
+            })
+            .expect("should enqueue TorrentSetBandwidth");
+        assert_eq!(args.download_limited, Some(true));
+        assert_eq!(args.download_limit, Some(500));
+    }
+
+    /// Disabling the download limit toggle sends `downloadLimited=false`.
+    #[test]
+    fn download_limit_toggle_off_sends_correct_args() {
+        let (mut screen, mut rx) = make_screen_with_sender();
+        screen.list.torrents = vec![make_bandwidth_torrent(1)];
+        let _ = screen.update(Message::List(TLMsg::TorrentSelected(1)));
+
+        let _ = screen.update(Message::Inspector(
+            inspector::Message::OptionsDownloadLimitToggled(false),
+        ));
+
+        let work = drain(&mut rx);
+        let (_, args) = work
+            .into_iter()
+            .find_map(|w| {
+                if let RpcWork::TorrentSetBandwidth {
+                    torrent_id, args, ..
+                } = w
+                {
+                    Some((torrent_id, args))
+                } else {
+                    None
+                }
+            })
+            .expect("should enqueue TorrentSetBandwidth");
+        assert_eq!(args.download_limited, Some(false));
+    }
+
+    /// Submitting a download limit value with the toggle OFF is a no-op (no RPC).
+    #[test]
+    fn download_limit_submit_noop_when_toggle_off() {
+        let (mut screen, mut rx) = make_screen_with_sender();
+        let mut torrent = make_bandwidth_torrent(1);
+        torrent.download_limited = false;
+        screen.list.torrents = vec![torrent];
+        let _ = screen.update(Message::List(TLMsg::TorrentSelected(1)));
+
+        let _ = screen.update(Message::Inspector(
+            inspector::Message::OptionsDownloadLimitSubmitted,
+        ));
+
+        let work = drain(&mut rx);
+        let bandwidth_count = work
+            .iter()
+            .filter(|w| matches!(w, RpcWork::TorrentSetBandwidth { .. }))
+            .count();
+        assert_eq!(
+            bandwidth_count, 0,
+            "should not enqueue RPC when toggle is off"
+        );
+    }
+
+    /// Submitting an upload limit value with the toggle OFF is a no-op (no RPC).
+    #[test]
+    fn upload_limit_submit_noop_when_toggle_off() {
+        let (mut screen, mut rx) = make_screen_with_sender();
+        let mut torrent = make_bandwidth_torrent(1);
+        torrent.upload_limited = false;
+        screen.list.torrents = vec![torrent];
+        let _ = screen.update(Message::List(TLMsg::TorrentSelected(1)));
+
+        let _ = screen.update(Message::Inspector(
+            inspector::Message::OptionsUploadLimitSubmitted,
+        ));
+
+        let work = drain(&mut rx);
+        let bandwidth_count = work
+            .iter()
+            .filter(|w| matches!(w, RpcWork::TorrentSetBandwidth { .. }))
+            .count();
+        assert_eq!(
+            bandwidth_count, 0,
+            "should not enqueue RPC when toggle is off"
+        );
+    }
+
+    // ── honorsSessionLimits semantics ─────────────────────────────────────────
+    // These tests document the precise semantic of the "Honor Global Speed Limits"
+    // toggle:
+    //   ON  (true)  → torrent respects whatever global limit is currently active on
+    //                 the daemon (standard limits when turtle mode is off; alternative
+    //                 limits when turtle mode is on).
+    //   OFF (false) → torrent ignores ALL session-level limits. Only its own
+    //                 per-torrent download/upload caps apply; if those are also
+    //                 disabled, the torrent runs uncapped.
+
+    /// Disabling honor on a torrent that has no per-torrent limits sends
+    /// `honors_session_limits=false` + `download_limited=false` + `upload_limited=false`.
+    /// The torrent will run uncapped: no global limit, no per-torrent limit.
+    #[test]
+    fn honor_off_no_per_torrent_limits_torrent_runs_uncapped() {
+        let (mut screen, mut rx) = make_screen_with_sender();
+        // Torrent with no per-torrent limits and honor=true (default state).
+        screen.list.torrents = vec![TorrentData {
+            id: 1,
+            name: "torrent".to_owned(),
+            status: 4,
+            percent_done: 0.5,
+            download_limited: false,
+            upload_limited: false,
+            honors_session_limits: true,
+            ..Default::default()
+        }];
+        let _ = screen.update(Message::List(TLMsg::TorrentSelected(1)));
+
+        let _ = screen.update(Message::Inspector(
+            inspector::Message::OptionsHonorGlobalToggled(false),
+        ));
+
+        let (_, args) = drain(&mut rx)
+            .into_iter()
+            .find_map(|w| {
+                if let RpcWork::TorrentSetBandwidth {
+                    torrent_id, args, ..
+                } = w
+                {
+                    Some((torrent_id, args))
+                } else {
+                    None
+                }
+            })
+            .expect("should enqueue TorrentSetBandwidth");
+
+        // Both global and per-torrent limits are off → torrent runs uncapped.
+        assert_eq!(args.honors_session_limits, Some(false));
+        assert_eq!(args.download_limited, Some(false));
+        assert_eq!(args.upload_limited, Some(false));
+    }
+
+    /// Re-enabling honor subjects the torrent to the active session limit again.
+    /// Which limit that is (standard vs alternative) depends on whether turtle mode
+    /// is active on the daemon — that is a daemon concern, not tested here.
+    /// This test confirms the client sends `honors_session_limits=true` so Transmission
+    /// will enforce whichever global limit is currently active.
+    #[test]
+    fn honor_on_restores_session_limit_compliance() {
+        let (mut screen, mut rx) = make_screen_with_sender();
+        screen.list.torrents = vec![TorrentData {
+            id: 1,
+            name: "torrent".to_owned(),
+            status: 4,
+            percent_done: 0.5,
+            download_limited: false,
+            upload_limited: false,
+            honors_session_limits: false, // currently bypassing global limits
+            ..Default::default()
+        }];
+        let _ = screen.update(Message::List(TLMsg::TorrentSelected(1)));
+
+        let _ = screen.update(Message::Inspector(
+            inspector::Message::OptionsHonorGlobalToggled(true),
+        ));
+
+        let (_, args) = drain(&mut rx)
+            .into_iter()
+            .find_map(|w| {
+                if let RpcWork::TorrentSetBandwidth {
+                    torrent_id, args, ..
+                } = w
+                {
+                    Some((torrent_id, args))
+                } else {
+                    None
+                }
+            })
+            .expect("should enqueue TorrentSetBandwidth");
+
+        // The torrent will comply with whatever global limit the daemon has active
+        // (standard or alternative depending on turtle mode state).
+        assert_eq!(args.honors_session_limits, Some(true));
+    }
+
+    /// When honor is OFF and a per-torrent download limit is also set, disabling honor
+    /// does NOT remove the per-torrent limit — the torrent's own cap still applies even
+    /// though it ignores global limits.
+    #[test]
+    fn honor_off_with_per_torrent_limit_torrent_still_capped_by_own_limit() {
+        let (mut screen, mut rx) = make_screen_with_sender();
+        screen.list.torrents = vec![TorrentData {
+            id: 1,
+            name: "torrent".to_owned(),
+            status: 4,
+            percent_done: 0.5,
+            download_limited: true,
+            download_limit: 300,
+            upload_limited: false,
+            upload_limit: 0,
+            honors_session_limits: true,
+            ..Default::default()
+        }];
+        let _ = screen.update(Message::List(TLMsg::TorrentSelected(1)));
+
+        let _ = screen.update(Message::Inspector(
+            inspector::Message::OptionsHonorGlobalToggled(false),
+        ));
+
+        let (_, args) = drain(&mut rx)
+            .into_iter()
+            .find_map(|w| {
+                if let RpcWork::TorrentSetBandwidth {
+                    torrent_id, args, ..
+                } = w
+                {
+                    Some((torrent_id, args))
+                } else {
+                    None
+                }
+            })
+            .expect("should enqueue TorrentSetBandwidth");
+
+        // Per-torrent download cap is preserved; global limits are bypassed.
+        assert_eq!(args.honors_session_limits, Some(false));
+        assert_eq!(args.download_limited, Some(true));
+        assert_eq!(args.download_limit, Some(300));
+        assert_eq!(args.upload_limited, Some(false));
     }
 }
