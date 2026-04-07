@@ -36,17 +36,25 @@ The torrent list SHALL display a column header row that remains visible while th
 
 ### Requirement: Scrollable torrent rows
 
-The list SHALL display one row per torrent, rendered inside a scrollable region. Each row SHALL include the following columns: Name (text), Status (text), Size (human-readable bytes), Downloaded (human-readable bytes), ↓ Speed (human-readable bytes/s, shown as "—" when zero), ↑ Speed (human-readable bytes/s, shown as "—" when zero), ETA (human-readable duration, shown as "—" when not applicable), Ratio (two decimal places, shown as "—" when no data uploaded), and Progress (color-coded progress bar). All human-readable formatting SHALL use the same helper functions as the detail inspector.
+The list SHALL display one row per torrent that matches the current active filter set, rendered
+inside a scrollable region. When no filter is active for a given torrent, that torrent SHALL be
+omitted from the rendered rows. Each row SHALL include the following columns: Name (text), Status
+(text), Size (human-readable bytes), Downloaded (human-readable bytes), ↓ Speed (human-readable
+bytes/s, shown as "—" when zero), ↑ Speed (human-readable bytes/s, shown as "—" when zero), ETA
+(human-readable duration, shown as "—" when not applicable), Ratio (two decimal places, shown as
+"—" when no data uploaded), and Progress (color-coded progress bar). All human-readable formatting
+SHALL use the same helper functions as the detail inspector.
 
-#### Scenario: Each torrent appears as a row
+#### Scenario: Each matching torrent appears as a row
 
 - **WHEN** the app has received torrent data from the daemon
-- **THEN** one row per torrent is visible in the list
+- **THEN** one row per torrent that matches the active filter set is visible in the list
 
 #### Scenario: All nine columns rendered per row
 
 - **WHEN** a torrent row is rendered
-- **THEN** all nine columns (Name, Status, Size, Downloaded, ↓ Speed, ↑ Speed, ETA, Ratio, Progress) are visible with correct values
+- **THEN** all nine columns (Name, Status, Size, Downloaded, ↓ Speed, ↑ Speed, ETA, Ratio,
+  Progress) are visible with correct values
 
 #### Scenario: Progress bar is green while downloading
 
@@ -77,6 +85,11 @@ The list SHALL display one row per torrent, rendered inside a scrollable region.
 
 - **WHEN** a torrent's upload ratio is -1 or 0 with no data ever uploaded
 - **THEN** the Ratio column displays "—"
+
+#### Scenario: Filtered-out torrent not rendered
+
+- **WHEN** a torrent's status bucket does not match any chip in the active filter set
+- **THEN** no row is rendered for that torrent
 
 ## ADDED Requirements
 

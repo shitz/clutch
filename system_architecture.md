@@ -54,6 +54,19 @@ dirs::config_dir()/clutch/config.toml.
 - We use Argon2id for Key Derivation and ChaCha20-Poly1305 for AEAD encryption (src/crypto.rs).
 - The unlocked master passphrase is held in a secrecy::SecretString which automatically zeroizes its backing memory when dropped. Crypto operations are spawned on blocking threads to avoid stalling the UI.
 
+## Client-Side Filtering
+
+The torrent list supports multi-select status filtering entirely in-process. A
+`HashSet<StatusFilter>` in `TorrentListScreen` drives two passes on every `view()` call:
+
+1. A **count pass** over the full `Vec<TorrentData>` tallies how many torrents belong to
+   each of the five semantic buckets (Downloading, Seeding, Paused, Active, Error).
+2. A **filter pass** retains only torrents whose `matching_filters()` set intersects the active
+   `HashSet` before the rows are rendered.
+
+No additional RPC calls are needed; the daemon continues to return the full torrent list on every
+poll tick.
+
 ## Directory Structure
 
 A quick map of where to find things:

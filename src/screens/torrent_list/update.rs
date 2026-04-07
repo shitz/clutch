@@ -19,7 +19,7 @@ use crate::rpc::{AddPayload, RpcWork};
 
 use super::add_dialog::{self, AddDialogState, FileReadResult, TorrentFileInfo};
 use super::sort::SortDir;
-use super::{Message, TorrentListScreen};
+use super::{Message, StatusFilter, TorrentListScreen};
 
 pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
     match msg {
@@ -365,6 +365,25 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
                     state.sort_column = Some(col);
                     state.sort_dir = SortDir::Asc;
                 }
+            }
+            Task::none()
+        }
+
+        // ── Filter chips ──────────────────────────────────────────────────────
+        Message::FilterToggled(filter) => {
+            if state.filters.contains(&filter) {
+                state.filters.remove(&filter);
+            } else {
+                state.filters.insert(filter);
+            }
+            Task::none()
+        }
+
+        Message::FilterAllClicked => {
+            if state.filters.len() == StatusFilter::all().len() {
+                state.filters.clear();
+            } else {
+                state.filters = StatusFilter::all().into_iter().collect();
             }
             Task::none()
         }

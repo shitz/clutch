@@ -23,12 +23,13 @@ use crate::format::{format_eta, format_size, format_speed};
 use crate::rpc::TorrentData;
 use crate::theme::{
     ICON_ADD, ICON_DELETE, ICON_DOWNLOAD, ICON_LINK, ICON_LOGOUT, ICON_PAUSE, ICON_PLAY,
-    ICON_SETTINGS, ICON_SPEED, ICON_UPLOAD, icon, progress_bar_style,
+    ICON_SETTINGS, ICON_SPEED, ICON_UPLOAD, MATERIAL_ICONS, icon, m3_filter_chip,
+    progress_bar_style,
 };
 
 use super::add_dialog::{AddDialogState, view_add_dialog};
 use super::sort::{SortColumn, SortDir, sort_torrents};
-use super::{Message, TorrentListScreen};
+use super::{Message, StatusFilter, TorrentListScreen, matching_filters};
 
 // Fixed pixel widths for narrow numeric columns.
 const W_STATUS: f32 = 90.0;
@@ -53,6 +54,46 @@ fn status_label(status: i32) -> &'static str {
     }
 }
 
+/// Build a single M3 filter chip element.
+///
+/// The checkmark glyph always occupies a fixed-width slot to prevent label
+/// jitter when the chip toggles between selected and unselected states.
+fn filter_chip(
+    label: &str,
+    count: u32,
+    is_selected: bool,
+    on_press: Message,
+) -> Element<'_, Message> {
+    let check = text(if is_selected { "\u{e876}" } else { "" })
+        .font(MATERIAL_ICONS)
+        .size(16)
+        .width(Length::Fixed(18.0))
+        .align_x(Alignment::Center);
+
+    let count_style = move |theme: &iced::Theme| iced::widget::text::Style {
+        color: Some(
+            theme
+                .palette()
+                .text
+                .scale_alpha(if is_selected { 0.80 } else { 0.60 }),
+        ),
+    };
+
+    let content = row![
+        check,
+        text(label).size(13),
+        text(format!("{count}")).size(11).style(count_style),
+    ]
+    .spacing(4)
+    .align_y(Alignment::Center);
+
+    button(content)
+        .padding([6, 12])
+        .on_press(on_press)
+        .style(move |theme, status| m3_filter_chip(theme, status, is_selected))
+        .into()
+}
+
 pub fn view(
     state: &TorrentListScreen,
     theme_mode: crate::app::ThemeMode,
@@ -68,14 +109,88 @@ pub fn view(
         Space::new().into()
     };
 
+    // ── Count pass: tally per-bucket counts over the full torrent list ────────
+    let mut count_downloading: u32 = 0;
+    let mut count_seeding: u32 = 0;
+    let mut count_paused: u32 = 0;
+    let mut count_active: u32 = 0;
+    let mut count_error: u32 = 0;
+    for t in &state.torrents {
+        for f in matching_filters(t) {
+            match f {
+                StatusFilter::Downloading => count_downloading += 1,
+                StatusFilter::Seeding => count_seeding += 1,
+                StatusFilter::Paused => count_paused += 1,
+                StatusFilter::Active => count_active += 1,
+                StatusFilter::Error => count_error += 1,
+            }
+        }
+    }
+
+    // ── Filter chips row ──────────────────────────────────────────────────────
+    let is_all_selected = state.filters.len() == StatusFilter::all().len();
+    let chips_row = row![
+        filter_chip(
+            "All",
+            state.torrents.len() as u32,
+            is_all_selected,
+            Message::FilterAllClicked,
+        ),
+        Space::new().width(Length::Fixed(4.0)),
+        filter_chip(
+            "Downloading",
+            count_downloading,
+            state.filters.contains(&StatusFilter::Downloading),
+            Message::FilterToggled(StatusFilter::Downloading),
+        ),
+        filter_chip(
+            "Seeding",
+            count_seeding,
+            state.filters.contains(&StatusFilter::Seeding),
+            Message::FilterToggled(StatusFilter::Seeding),
+        ),
+        filter_chip(
+            "Paused",
+            count_paused,
+            state.filters.contains(&StatusFilter::Paused),
+            Message::FilterToggled(StatusFilter::Paused),
+        ),
+        filter_chip(
+            "Active",
+            count_active,
+            state.filters.contains(&StatusFilter::Active),
+            Message::FilterToggled(StatusFilter::Active),
+        ),
+        filter_chip(
+            "Error",
+            count_error,
+            state.filters.contains(&StatusFilter::Error),
+            Message::FilterToggled(StatusFilter::Error),
+        ),
+    ]
+    .spacing(6)
+    .padding([4, 0]);
+
     // ── Sticky header ─────────────────────────────────────────────────────────
     let header = view_column_header(state);
 
-    // ── Data rows ─────────────────────────────────────────────────────────────
-    let display: Vec<&TorrentData> = match state.sort_column {
+    // ── Data rows (sorted, then filtered against active chips) ────────────────
+    let sorted: Vec<&TorrentData> = match state.sort_column {
         Some(col) => sort_torrents(&state.torrents, col, state.sort_dir),
         None => state.torrents.iter().collect(),
     };
+    let display: Vec<&TorrentData> = sorted
+        .into_iter()
+        .filter(|t| {
+            matching_filters(t)
+                .iter()
+                .any(|f| state.filters.contains(f))
+        })
+        .collect();
+
+    let is_list_empty = state.initial_load_done && state.torrents.is_empty();
+    let is_filter_empty =
+        state.initial_load_done && !state.torrents.is_empty() && display.is_empty();
 
     let rows = display.into_iter().map(|t| {
         let ratio_str = if t.upload_ratio < 0.0 {
@@ -147,7 +262,7 @@ pub fn view(
             .into()
     });
 
-    let list: Element<Message> = if state.initial_load_done && state.torrents.is_empty() {
+    let list: Element<Message> = if is_list_empty {
         // Empty state — centered logo with helper text
         container(
             column![
@@ -171,6 +286,20 @@ pub fn view(
         .center_x(Length::Fill)
         .center_y(Length::Fill)
         .into()
+    } else if is_filter_empty {
+        // Filter placeholder — no torrents match the active chips
+        container(
+            text("No torrents match the selected filters.")
+                .size(14)
+                .style(|t: &iced::Theme| iced::widget::text::Style {
+                    color: Some(t.palette().text.scale_alpha(0.5)),
+                }),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
     } else {
         scrollable(container(column(rows).spacing(4)).padding(iced::Padding {
             top: 0.0,
@@ -188,11 +317,18 @@ pub fn view(
     };
 
     let main_content: Element<Message> = container(
-        column![toolbar, error_row, header, rule::horizontal(1), list]
-            .spacing(4)
-            .padding([8, 16])
-            .width(Length::Fill)
-            .height(Length::Fill),
+        column![
+            toolbar,
+            error_row,
+            chips_row,
+            header,
+            rule::horizontal(1),
+            list
+        ]
+        .spacing(4)
+        .padding([8, 16])
+        .width(Length::Fill)
+        .height(Length::Fill),
     )
     .into();
 

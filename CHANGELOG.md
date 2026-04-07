@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [v0.11.0] - 2026-04-06
+### Added
+
+- Filter chips row in the torrent list: six Filter Chips (All, Downloading, Seeding, Paused,
+  Active, Error) between the toolbar and column headers. Chips are multi-select; clicking a chip
+  toggles its status bucket. The "All" chip selects or deselects all buckets at once. Each chip
+  displays a real-time count of matching torrents derived from the full un-filtered list.
+
+## [0.11.0] - 2026-04-06
 
 ### Added
 

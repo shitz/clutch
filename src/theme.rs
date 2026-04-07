@@ -903,3 +903,62 @@ pub fn m3_primary_button(theme: &Theme, status: button::Status) -> button::Style
         },
     }
 }
+
+/// M3 Filter Chip button style.
+///
+/// Pass `is_selected = true` for the selected state (soft primary wash, no border).
+/// Pass `is_selected = false` for the unselected state (transparent with a subtle
+/// outline; faint fill on hover).
+pub fn m3_filter_chip(theme: &Theme, status: button::Status, is_selected: bool) -> button::Style {
+    let palette = theme.extended_palette();
+    let radius = 8.0.into();
+
+    if is_selected {
+        button::Style {
+            background: Some(iced::Background::Color(Color {
+                a: 0.15,
+                ..palette.primary.base.color
+            })),
+            text_color: palette.primary.base.color,
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius,
+            },
+            shadow: Shadow::default(),
+            snap: false,
+        }
+    } else {
+        let outline = Color {
+            a: 0.30,
+            ..palette.background.base.text
+        };
+        match status {
+            button::Status::Hovered | button::Status::Pressed => button::Style {
+                background: Some(iced::Background::Color(Color {
+                    a: 0.05,
+                    ..palette.background.base.text
+                })),
+                text_color: palette.background.base.text,
+                border: Border {
+                    color: outline,
+                    width: 1.0,
+                    radius,
+                },
+                shadow: Shadow::default(),
+                snap: false,
+            },
+            _ => button::Style {
+                background: None,
+                text_color: palette.background.base.text,
+                border: Border {
+                    color: outline,
+                    width: 1.0,
+                    radius,
+                },
+                shadow: Shadow::default(),
+                snap: false,
+            },
+        }
+    }
+}

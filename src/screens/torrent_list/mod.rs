@@ -27,6 +27,8 @@ mod update;
 pub mod view;
 pub mod worker;
 
+use std::collections::HashSet;
+
 use tokio::sync::mpsc;
 
 use crate::rpc::{ConnectionParams, RpcWork, SessionData, TorrentData, TransmissionCredentials};
@@ -39,6 +41,60 @@ pub use add_dialog::FileReadResult;
 pub use update::update;
 pub use view::view;
 pub use worker::rpc_worker_stream;
+
+// ── StatusFilter ──────────────────────────────────────────────────────────────
+
+/// Consolidated status buckets used for client-side filter chips.
+///
+/// A torrent may match more than one bucket simultaneously (e.g. a torrent
+/// actively downloading at 500 KB/s matches both `Downloading` and `Active`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StatusFilter {
+    /// Transmission status 3 (queue download) or 4 (downloading).
+    Downloading,
+    /// Transmission status 5 (queue seed) or 6 (seeding).
+    Seeding,
+    /// Transmission status 0 (stopped).
+    Paused,
+    /// Derived: `rate_download > 0 || rate_upload > 0`.
+    Active,
+    /// Transmission status 1 (check queue) or 2 (checking).
+    Error,
+}
+
+impl StatusFilter {
+    /// All filter variants in display order.
+    pub const fn all() -> [StatusFilter; 5] {
+        [
+            StatusFilter::Downloading,
+            StatusFilter::Seeding,
+            StatusFilter::Paused,
+            StatusFilter::Active,
+            StatusFilter::Error,
+        ]
+    }
+}
+
+/// Returns all [`StatusFilter`] buckets that apply to `t`.
+///
+/// A torrent may match more than one bucket simultaneously; for example, a
+/// torrent actively downloading at 500 KB/s will be in both `Downloading` and
+/// `Active`. The caller should use `.iter().any(|f| set.contains(f))` to
+/// decide visibility.
+pub fn matching_filters(t: &TorrentData) -> Vec<StatusFilter> {
+    let mut out = Vec::with_capacity(2);
+    match t.status {
+        3 | 4 => out.push(StatusFilter::Downloading),
+        5 | 6 => out.push(StatusFilter::Seeding),
+        0 => out.push(StatusFilter::Paused),
+        1 | 2 => out.push(StatusFilter::Error),
+        _ => {}
+    }
+    if t.rate_download > 0 || t.rate_upload > 0 {
+        out.push(StatusFilter::Active);
+    }
+    out
+}
 
 use iced::Subscription;
 
@@ -89,6 +145,9 @@ pub enum Message {
     OpenSettingsClicked,
     // Column sort
     ColumnHeaderClicked(SortColumn),
+    // Filter chips
+    FilterAllClicked,
+    FilterToggled(StatusFilter),
     // Keyboard
     /// Tab key pressed while the add-torrent dialog is open.
     DialogTabKeyPressed {
@@ -115,6 +174,8 @@ pub struct TorrentListScreen {
     pub add_dialog: AddDialogState,
     pub sort_column: Option<SortColumn>,
     pub sort_dir: SortDir,
+    /// Active filter chips — only torrents matching at least one bucket are shown.
+    pub filters: HashSet<StatusFilter>,
 }
 
 impl TorrentListScreen {
@@ -131,6 +192,7 @@ impl TorrentListScreen {
             sender: None,
             sort_column: None,
             sort_dir: SortDir::Asc,
+            filters: StatusFilter::all().into_iter().collect(),
         }
     }
 
@@ -702,5 +764,168 @@ mod tests {
         } else {
             panic!("expected AddFile state");
         }
+    }
+
+    // ── matching_filters tests ────────────────────────────────────────────────
+
+    fn torrent_with(status: i32, rate_dl: i64, rate_ul: i64) -> TorrentData {
+        TorrentData {
+            id: 1,
+            name: "test".to_owned(),
+            status,
+            rate_download: rate_dl,
+            rate_upload: rate_ul,
+            ..Default::default()
+        }
+    }
+
+    /// Status 4 maps to Downloading only (no active rates).
+    #[test]
+    fn matching_filters_status_4_is_downloading() {
+        let t = torrent_with(4, 0, 0);
+        let buckets = matching_filters(&t);
+        assert!(
+            buckets.contains(&StatusFilter::Downloading),
+            "expected Downloading"
+        );
+        assert!(
+            !buckets.contains(&StatusFilter::Active),
+            "no active rate, should not be Active"
+        );
+    }
+
+    /// Status 3 (queue download) also maps to Downloading.
+    #[test]
+    fn matching_filters_status_3_is_downloading() {
+        let t = torrent_with(3, 0, 0);
+        let buckets = matching_filters(&t);
+        assert!(buckets.contains(&StatusFilter::Downloading));
+    }
+
+    /// Downloading torrent with rate_download > 0 matches both Downloading and Active.
+    #[test]
+    fn matching_filters_active_download_is_both_downloading_and_active() {
+        let t = torrent_with(4, 500_000, 0);
+        let buckets = matching_filters(&t);
+        assert!(
+            buckets.contains(&StatusFilter::Downloading),
+            "expected Downloading"
+        );
+        assert!(
+            buckets.contains(&StatusFilter::Active),
+            "expected Active from rate_download"
+        );
+    }
+
+    /// Status 6 maps to Seeding only (no active rates).
+    #[test]
+    fn matching_filters_status_6_is_seeding() {
+        let t = torrent_with(6, 0, 0);
+        let buckets = matching_filters(&t);
+        assert!(buckets.contains(&StatusFilter::Seeding));
+        assert!(!buckets.contains(&StatusFilter::Active));
+    }
+
+    /// Status 5 (queue seed) maps to Seeding.
+    #[test]
+    fn matching_filters_status_5_is_seeding() {
+        let t = torrent_with(5, 0, 0);
+        let buckets = matching_filters(&t);
+        assert!(buckets.contains(&StatusFilter::Seeding));
+    }
+
+    /// Seeding torrent with rate_upload > 0 matches both Seeding and Active.
+    #[test]
+    fn matching_filters_active_seed_is_both_seeding_and_active() {
+        let t = torrent_with(6, 0, 100_000);
+        let buckets = matching_filters(&t);
+        assert!(buckets.contains(&StatusFilter::Seeding));
+        assert!(buckets.contains(&StatusFilter::Active));
+    }
+
+    /// Status 0 maps to Paused.
+    #[test]
+    fn matching_filters_status_0_is_paused() {
+        let t = torrent_with(0, 0, 0);
+        let buckets = matching_filters(&t);
+        assert!(buckets.contains(&StatusFilter::Paused));
+        assert!(!buckets.contains(&StatusFilter::Active));
+    }
+
+    /// Status 1 maps to Error.
+    #[test]
+    fn matching_filters_status_1_is_error() {
+        let t = torrent_with(1, 0, 0);
+        let buckets = matching_filters(&t);
+        assert!(buckets.contains(&StatusFilter::Error));
+    }
+
+    /// Status 2 maps to Error.
+    #[test]
+    fn matching_filters_status_2_is_error() {
+        let t = torrent_with(2, 0, 0);
+        let buckets = matching_filters(&t);
+        assert!(buckets.contains(&StatusFilter::Error));
+    }
+
+    // ── FilterAllClicked handler tests ────────────────────────────────────────
+
+    /// FilterAllClicked when all 5 filters are active clears the set.
+    #[test]
+    fn filter_all_clicked_when_all_selected_clears_set() {
+        let mut screen = make_screen();
+        assert_eq!(screen.filters.len(), StatusFilter::all().len());
+        let _ = update(&mut screen, Message::FilterAllClicked);
+        assert!(screen.filters.is_empty());
+    }
+
+    /// FilterAllClicked when fewer than 5 filters are active restores all 5.
+    #[test]
+    fn filter_all_clicked_when_partial_restores_all() {
+        let mut screen = make_screen();
+        screen.filters.clear();
+        screen.filters.insert(StatusFilter::Downloading);
+        let _ = update(&mut screen, Message::FilterAllClicked);
+        assert_eq!(screen.filters.len(), StatusFilter::all().len());
+    }
+
+    /// FilterAllClicked when empty also restores all 5.
+    #[test]
+    fn filter_all_clicked_when_empty_restores_all() {
+        let mut screen = make_screen();
+        screen.filters.clear();
+        let _ = update(&mut screen, Message::FilterAllClicked);
+        assert_eq!(screen.filters.len(), StatusFilter::all().len());
+    }
+
+    // ── FilterToggled handler tests ───────────────────────────────────────────
+
+    /// FilterToggled removes a present filter.
+    #[test]
+    fn filter_toggled_removes_present_filter() {
+        let mut screen = make_screen();
+        assert!(screen.filters.contains(&StatusFilter::Seeding));
+        let _ = update(&mut screen, Message::FilterToggled(StatusFilter::Seeding));
+        assert!(!screen.filters.contains(&StatusFilter::Seeding));
+    }
+
+    /// FilterToggled inserts an absent filter.
+    #[test]
+    fn filter_toggled_inserts_absent_filter() {
+        let mut screen = make_screen();
+        screen.filters.remove(&StatusFilter::Error);
+        assert!(!screen.filters.contains(&StatusFilter::Error));
+        let _ = update(&mut screen, Message::FilterToggled(StatusFilter::Error));
+        assert!(screen.filters.contains(&StatusFilter::Error));
+    }
+
+    /// Toggling a filter twice leaves the set unchanged.
+    #[test]
+    fn filter_toggled_twice_is_idempotent() {
+        let mut screen = make_screen();
+        let original_len = screen.filters.len();
+        let _ = update(&mut screen, Message::FilterToggled(StatusFilter::Paused));
+        let _ = update(&mut screen, Message::FilterToggled(StatusFilter::Paused));
+        assert_eq!(screen.filters.len(), original_len);
     }
 }
