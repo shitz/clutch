@@ -14,6 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   toggles its status bucket. The "All" chip selects or deselects all buckets at once. Each chip
   displays a real-time count of matching torrents derived from the full un-filtered list.
 
+### Fixed
+
+- Passphrase hash (`master_passphrase_hash`) was silently erased from `config.toml` on every
+  settings save. `SettingsScreen::build_store_snapshot` now carries the hash forward from the
+  store that was loaded when the screen opened, so the hash survives Save, Delete, and General
+  tab saves.
+- Test Connection in the Connections settings tab sent empty credentials when the profile had an
+  encrypted password and the session passphrase was not yet unlocked, causing an authentication
+  failure. The test now prompts for the master passphrase first (same unlock dialog as the
+  Connect flow), then fires the probe with the decrypted password.
+
 ## [0.11.0] - 2026-04-06
 
 ### Added

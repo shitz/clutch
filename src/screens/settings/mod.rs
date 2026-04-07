@@ -304,4 +304,65 @@ mod tests {
         let (_, result) = s.update(Message::EnterPressed);
         assert!(result.is_none());
     }
+
+    // ── Regression: passphrase hash must survive settings round-trips ─────────
+
+    /// `build_store_snapshot` must carry forward the `master_passphrase_hash`
+    /// that was present when the screen was opened.  The previous bug zeroed it
+    /// on every save, erasing the hash from config.toml.
+    #[test]
+    fn build_store_snapshot_preserves_passphrase_hash() {
+        let (mut store, _) = store_with_profile();
+        store.master_passphrase_hash = Some("$argon2id$v=19$...".to_owned());
+        let s = SettingsScreen::new(&store, None, SettingsTab::Connections);
+        let snap = s.build_store_snapshot();
+        assert_eq!(
+            snap.master_passphrase_hash,
+            Some("$argon2id$v=19$...".to_owned()),
+            "passphrase hash must not be cleared by build_store_snapshot"
+        );
+    }
+
+    /// `build_store_snapshot` with no hash set must also return `None`
+    /// (no spurious empty string injected).
+    #[test]
+    fn build_store_snapshot_no_hash_stays_none() {
+        let (store, _) = store_with_profile();
+        assert!(store.master_passphrase_hash.is_none());
+        let s = SettingsScreen::new(&store, None, SettingsTab::Connections);
+        let snap = s.build_store_snapshot();
+        assert!(
+            snap.master_passphrase_hash.is_none(),
+            "snapshot must not invent a hash when none was set"
+        );
+    }
+
+    // ── Regression: test-connection with saved password must use real creds ───
+
+    /// When a profile has an encrypted password and the user has NOT typed a new
+    /// one, `TestConnectionClicked` must return `TestConnectionWithId` so that
+    /// `app::update` can decrypt the password (or prompt for the passphrase).
+    /// The previous bug sent un-decrypted (empty) credentials directly.
+    #[test]
+    fn test_connection_with_saved_password_returns_test_connection_with_id() {
+        let mut profile = ConnectionProfile::new_blank();
+        profile.encrypted_password = Some("salt$nonce$cipher".to_owned());
+        let id = profile.id;
+        let mut store = ProfileStore::default();
+        store.profiles.push(profile);
+        let mut s = SettingsScreen::new(&store, None, SettingsTab::Connections);
+        let _ = s.update(Message::ProfileListClicked(id));
+        // User has not typed a new password.
+        assert!(
+            s.draft
+                .as_ref()
+                .map(|d| !d.password_changed)
+                .unwrap_or(false)
+        );
+        let (_, result) = s.update(Message::TestConnectionClicked);
+        assert!(
+            matches!(result, Some(SettingsResult::TestConnectionWithId { profile_id }) if profile_id == id),
+            "must delegate to app::update via TestConnectionWithId, not fire a bare request"
+        );
+    }
 }

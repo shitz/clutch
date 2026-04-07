@@ -49,7 +49,8 @@ pub struct SettingsScreen {
 
     // ── Context from AppState ────────────────────────────────────────────────
     pub active_profile_id: Option<Uuid>,
-
+    /// Preserved from the app-level store so disk saves always include it.
+    pub master_passphrase_hash: Option<String>,
     // ── General tab transient state ──────────────────────────────────────────
     pub general_saved: bool,
     pub general_dirty: bool,
@@ -75,6 +76,7 @@ impl SettingsScreen {
             selected_profile_id: store.profiles.first().map(|p| p.id),
             draft: store.profiles.first().map(ProfileDraft::from_profile),
             active_profile_id,
+            master_passphrase_hash: store.master_passphrase_hash.clone(),
             general_saved: false,
             general_dirty: false,
             theme_saved: store.general.theme,
@@ -85,7 +87,7 @@ impl SettingsScreen {
     pub fn build_store_snapshot(&self) -> ProfileStore {
         ProfileStore {
             last_connected: None,
-            master_passphrase_hash: None,
+            master_passphrase_hash: self.master_passphrase_hash.clone(),
             general: GeneralSettings {
                 theme: self.theme_draft,
                 refresh_interval: self

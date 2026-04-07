@@ -398,6 +398,11 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
     // ── Auth dialog messages ──────────────────────────────────────────────────
 
     if let Some(task) = crate::auth::handle_message(state, &message) {
+        // Keep the settings screen's cached hash in sync (e.g. after first-time
+        // passphrase setup while the settings screen is open).
+        if let Screen::Settings(settings) = &mut state.screen {
+            settings.master_passphrase_hash = state.profiles.master_passphrase_hash.clone();
+        }
         return task;
     }
 
@@ -664,7 +669,26 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 }
                             }
                             settings::SettingsResult::TestConnectionWithId { profile_id } => {
-                                // Use the profile's real (decrypted) credentials for the test.
+                                // If the passphrase is locked, prompt for it before testing.
+                                if let Some(profile) = state.profiles.get(profile_id)
+                                    && profile.encrypted_password.is_some()
+                                    && state.unlocked_passphrase.is_none()
+                                {
+                                    state.active_dialog = Some(AuthDialog::Unlock {
+                                        pending_action: PendingAction::TestConnectionFromSettings {
+                                            profile_id,
+                                        },
+                                        passphrase_input: String::new(),
+                                        error: None,
+                                        is_processing: false,
+                                    });
+                                    return task.map(Message::Settings).chain(
+                                        iced::widget::operation::focus(
+                                            crate::auth::unlock_input_id(),
+                                        ),
+                                    );
+                                }
+                                // Passphrase available (or no password required).
                                 let passphrase = state
                                     .unlocked_passphrase
                                     .as_ref()

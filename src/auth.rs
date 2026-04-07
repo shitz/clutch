@@ -51,6 +51,7 @@ pub fn setup_confirm_id() -> iced::widget::Id {
 pub enum PendingAction {
     ConnectToProfile(Uuid),
     SavePassword { profile_id: Uuid, password: String },
+    TestConnectionFromSettings { profile_id: Uuid },
 }
 
 /// Active passphrase dialog — rendered as a modal overlay.
@@ -313,6 +314,26 @@ pub fn handle_message(state: &mut AppState, message: &Message) -> Option<Task<Me
                         },
                     );
                     Some(task)
+                }
+                PendingAction::TestConnectionFromSettings { profile_id } => {
+                    let Some(profile) = state.profiles.get(profile_id) else {
+                        return Some(Task::none());
+                    };
+                    let creds = profile.credentials(Some(passphrase.as_str()));
+                    let url = creds.rpc_url();
+                    let probe = Task::perform(
+                        async move {
+                            crate::rpc::session_get(&url, &creds, "")
+                                .await
+                                .map_err(|e| e.to_string())
+                        },
+                        |r| {
+                            Message::Settings(
+                                crate::screens::settings::Message::TestConnectionResult(r),
+                            )
+                        },
+                    );
+                    Some(probe)
                 }
             }
         }
