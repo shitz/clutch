@@ -15,21 +15,22 @@
 use iced::widget::rule;
 use iced::widget::tooltip;
 use iced::widget::{
-    Space, button, checkbox, column, container, opaque, progress_bar, row, scrollable, stack, text,
+    Space, button, checkbox, column, container, mouse_area, opaque, progress_bar, row, scrollable,
+    stack, text,
 };
 use iced::{Alignment, Element, Length};
 
 use crate::format::{format_eta, format_size, format_speed};
 use crate::rpc::TorrentData;
 use crate::theme::{
-    ICON_ADD, ICON_DELETE, ICON_DOWNLOAD, ICON_LINK, ICON_LOGOUT, ICON_PAUSE, ICON_PLAY,
-    ICON_SETTINGS, ICON_SPEED, ICON_UPLOAD, MATERIAL_ICONS, icon, m3_filter_chip,
+    ICON_ADD, ICON_DELETE, ICON_DOWNLOAD, ICON_FOLDER, ICON_LINK, ICON_LOGOUT, ICON_PAUSE,
+    ICON_PLAY, ICON_SETTINGS, ICON_SPEED, ICON_UPLOAD, MATERIAL_ICONS, icon, m3_filter_chip,
     progress_bar_style,
 };
 
 use super::add_dialog::{AddDialogState, view_add_dialog};
 use super::sort::{SortColumn, SortDir, sort_torrents};
-use super::{Message, StatusFilter, TorrentListScreen, matching_filters};
+use super::{Message, SetLocationDialog, StatusFilter, TorrentListScreen, matching_filters};
 
 // Fixed pixel widths for narrow numeric columns.
 const W_STATUS: f32 = 90.0;
@@ -245,7 +246,8 @@ pub fn view(
         .align_y(iced::Center);
 
         let is_selected = state.selected_id == Some(t.id);
-        let row_elem: Element<Message> = if is_selected {
+        let is_ctx_target = state.context_menu.is_some_and(|(id, _)| id == t.id);
+        let row_elem: Element<Message> = if is_selected || is_ctx_target {
             container(row_content)
                 .style(crate::theme::selected_row)
                 .width(Length::Fill)
@@ -254,12 +256,15 @@ pub fn view(
             row_content.into()
         };
 
-        button(row_elem)
-            .on_press(Message::TorrentSelected(t.id))
-            .style(iced::widget::button::text)
-            .width(Length::Fill)
-            .padding(0)
-            .into()
+        mouse_area(
+            button(row_elem)
+                .on_press(Message::TorrentSelected(t.id))
+                .style(iced::widget::button::text)
+                .width(Length::Fill)
+                .padding(0),
+        )
+        .on_right_press(Message::TorrentRightClicked(t.id))
+        .into()
     });
 
     let list: Element<Message> = if is_list_empty {
@@ -338,7 +343,8 @@ pub fn view(
         dialog_state => stack![main_content, view_add_dialog(dialog_state)].into(),
     };
 
-    if let Some((del_id, del_local)) = state.confirming_delete {
+    let after_delete: Element<Message> = if let Some((del_id, del_local)) = state.confirming_delete
+    {
         let name = state
             .torrents
             .iter()
@@ -348,7 +354,133 @@ pub fn view(
         stack![after_add, opaque(view_delete_dialog(name, del_local))].into()
     } else {
         after_add
+    };
+
+    // ── Set Data Location dialog ──────────────────────────────────────────────
+    let after_set_location: Element<Message> = if let Some(dlg) = &state.set_location_dialog {
+        stack![after_delete, opaque(view_set_location_dialog(dlg))].into()
+    } else {
+        after_delete
+    };
+
+    // ── Context menu overlay ──────────────────────────────────────────────────
+    // Rendered at the main_screen level via `view_context_menu_overlay` so it
+    // can draw over the inspector panel. Nothing to do here.
+    after_set_location
+}
+
+/// Menu width in logical pixels — used for right-edge mitigation.
+const MENU_WIDTH: f32 = 220.0;
+
+/// Builds a single M3 context-menu row with a fixed-width icon container and
+/// an edge-to-edge hover highlight. Pass `on_press = None` to render disabled.
+fn menu_item<'a>(
+    icon_glyph: char,
+    label: &'a str,
+    on_press: Option<Message>,
+) -> Element<'a, Message> {
+    // Force every icon glyph into an identical 24-px bounding box so that
+    // narrow glyphs (play triangle) align with wide ones (trash square).
+    let icon_widget = text(icon_glyph)
+        .font(MATERIAL_ICONS)
+        .size(18)
+        .width(Length::Fixed(24.0))
+        .align_x(Alignment::Center);
+
+    let content = row![icon_widget, text(label).size(14)]
+        .spacing(12)
+        .align_y(Alignment::Center);
+
+    let btn = button(content).width(Length::Fill).padding([8, 16]);
+
+    if let Some(msg) = on_press {
+        btn.on_press(msg).style(crate::theme::m3_menu_item).into()
+    } else {
+        btn.style(crate::theme::m3_menu_item_disabled).into()
     }
+}
+
+/// Builds the context menu overlay element when a context menu is open.
+///
+/// Returns `None` when no context menu is active. The returned element must be
+/// placed on top of the **full** application content (including the inspector)
+/// so the menu is not clipped by the torrent-list container.
+pub fn view_context_menu_overlay(state: &TorrentListScreen) -> Option<Element<'_, Message>> {
+    let (torrent_id, point) = state.context_menu?;
+
+    // Bottom-edge mitigation: shift menu up if it would overflow.
+    let effective_y = if point.y > state.window_height - 150.0 {
+        point.y - 150.0
+    } else {
+        point.y
+    };
+
+    // Right-edge mitigation: anchor to the left of the cursor when there is
+    // not enough horizontal space to the right.
+    let effective_x = if point.x + MENU_WIDTH > state.window_width {
+        (point.x - MENU_WIDTH).max(0.0)
+    } else {
+        point.x
+    };
+
+    let torrent_opt = state.torrents.iter().find(|t| t.id == torrent_id);
+    let can_start = torrent_opt.is_some_and(|t| !matches!(t.status, 3..=6));
+    let can_pause = torrent_opt.is_some_and(|t| matches!(t.status, 3..=6));
+
+    // M3 menu card: 8px vertical padding, zero horizontal padding so buttons
+    // span edge-to-edge with their own horizontal padding inside.
+    let menu_card = container(
+        column![
+            menu_item(
+                ICON_PLAY,
+                "Start",
+                can_start.then_some(Message::ContextMenuStart(torrent_id))
+            ),
+            menu_item(
+                ICON_PAUSE,
+                "Pause",
+                can_pause.then_some(Message::ContextMenuPause(torrent_id))
+            ),
+            menu_item(
+                ICON_DELETE,
+                "Delete",
+                Some(Message::ContextMenuDelete(torrent_id))
+            ),
+            menu_item(
+                ICON_FOLDER,
+                "Set Data Location",
+                Some(Message::OpenSetLocation(torrent_id))
+            ),
+        ]
+        .spacing(0),
+    )
+    .padding(iced::Padding {
+        top: 8.0,
+        bottom: 8.0,
+        left: 0.0,
+        right: 0.0,
+    })
+    .width(Length::Fixed(MENU_WIDTH))
+    .style(crate::theme::m3_menu_card);
+
+    let positioned = container(menu_card)
+        .padding(iced::Padding {
+            top: effective_y,
+            left: effective_x,
+            right: 0.0,
+            bottom: 0.0,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill);
+
+    let click_away = mouse_area(
+        container(Space::new())
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .on_press(Message::DismissContextMenu);
+
+    Some(stack![click_away, positioned].into())
 }
 
 fn view_delete_dialog(name: &str, del_local: bool) -> Element<'_, Message> {
@@ -411,6 +543,54 @@ fn view_delete_dialog(name: &str, del_local: bool) -> Element<'_, Message> {
             ..Default::default()
         }
     });
+
+    container(card)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(|_: &iced::Theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgba8(
+                0, 0, 0, 0.70,
+            ))),
+            ..Default::default()
+        })
+        .into()
+}
+
+fn view_set_location_dialog(dlg: &SetLocationDialog) -> Element<'_, Message> {
+    use iced::widget::text_input;
+
+    let card = container(
+        column![
+            text("Set Data Location").size(18),
+            text("Destination path on the daemon's filesystem"),
+            text_input("/path/to/data", &dlg.path)
+                .on_input(Message::SetLocationPathChanged)
+                .padding([12, 16])
+                .style(crate::theme::m3_text_input),
+            checkbox(dlg.move_data)
+                .label("Move data to new location")
+                .on_toggle(|_| Message::SetLocationMoveToggled),
+            row![
+                Space::new().width(Length::Fill),
+                button("Cancel")
+                    .on_press(Message::SetLocationCancel)
+                    .padding([10, 24])
+                    .style(crate::theme::m3_tonal_button),
+                button("Apply")
+                    .on_press(Message::SetLocationApply)
+                    .padding([10, 24])
+                    .style(crate::theme::m3_primary_button),
+            ]
+            .spacing(8)
+            .width(Length::Fill),
+        ]
+        .spacing(16),
+    )
+    .padding(28)
+    .max_width(440.0)
+    .style(crate::theme::m3_card);
 
     container(card)
         .width(Length::Fill)

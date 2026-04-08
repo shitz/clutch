@@ -272,11 +272,20 @@ fn view_general(torrent: &TorrentData) -> Element<'_, Message> {
         format!("{:.2}", torrent.upload_ratio)
     };
 
+    let error_str = if torrent.error == 0 {
+        "none".to_owned()
+    } else if torrent.error_string.is_empty() {
+        format!("error {}", torrent.error)
+    } else {
+        torrent.error_string.clone()
+    };
+
     let col1 = column![
         info_row("Total Size", format_size(torrent.total_size)),
         info_row("Downloaded", format_size(torrent.downloaded_ever)),
         info_row("Uploaded", format_size(torrent.uploaded_ever)),
         info_row("Ratio", ratio_str),
+        info_row("Error", error_str),
     ]
     .spacing(4)
     .width(Length::FillPortion(1));
@@ -285,6 +294,7 @@ fn view_general(torrent: &TorrentData) -> Element<'_, Message> {
         info_row("ETA", format_eta(torrent.eta)),
         info_row("Download Speed", format_speed(torrent.rate_download)),
         info_row("Upload Speed", format_speed(torrent.rate_upload)),
+        info_row("Data Path", torrent.download_dir.clone()),
     ]
     .spacing(4)
     .width(Length::FillPortion(1));

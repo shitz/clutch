@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use super::error::RpcError;
 use super::models::{
-    AddPayload, SessionData, SessionSetArgs, TorrentBandwidthArgs, TorrentData,
+    AddPayload, SessionData, SessionSetArgs, SetLocationArgs, TorrentBandwidthArgs, TorrentData,
     TransmissionCredentials,
 };
 use super::transport::{RpcResponse, post_rpc};
@@ -176,7 +176,9 @@ pub async fn torrent_get(
             "downloadLimited", "downloadLimit",
             "uploadLimited", "uploadLimit",
             "seedRatioLimit", "seedRatioMode",
-            "honorsSessionLimits"
+            "honorsSessionLimits",
+            "downloadDir",
+            "error", "errorString"
         ]
     });
 
@@ -311,6 +313,39 @@ pub async fn torrent_add(
             resp.result
         )))
     }
+}
+
+/// Relocate a torrent's data on the daemon's filesystem.
+///
+/// When `move_data` is `true`, the daemon physically moves the existing
+/// files to `location`. When `false`, it only updates its internal record
+/// without touching the data (useful when you've already moved the files
+/// manually).
+pub async fn torrent_set_location(
+    url: &str,
+    credentials: &TransmissionCredentials,
+    session_id: &str,
+    torrent_id: i64,
+    location: &str,
+    move_data: bool,
+) -> Result<(), RpcError> {
+    tracing::debug!(%url, %session_id, torrent_id, %location, move_data, "Sending torrent-set-location");
+    let args = SetLocationArgs {
+        ids: vec![torrent_id],
+        location: location.to_owned(),
+        move_data,
+    };
+    let payload = serde_json::to_value(&args).map_err(|e| RpcError::ParseError(e.to_string()))?;
+    let resp = post_rpc(
+        url,
+        credentials,
+        session_id,
+        "torrent-set-location",
+        Some(payload),
+        Duration::from_secs(30),
+    )
+    .await?;
+    check_success(resp, "torrent-set-location")
 }
 
 /// Set per-file wanted state for an existing torrent.
@@ -1117,5 +1152,73 @@ mod tests {
         let result =
             torrent_set_bandwidth(&url, &creds, "old-id", 1, TorrentBandwidthArgs::default()).await;
         assert!(matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "new-id"));
+    }
+
+    // ── torrent_set_location ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn torrent_set_location_with_move_true_succeeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "result": "success", "arguments": {} })),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_set_location(&url, &creds, "sid", 42, "/new/path", true).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn torrent_set_location_with_move_false_succeeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "result": "success", "arguments": {} })),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_set_location(&url, &creds, "sid", 1, "/other/path", false).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn torrent_set_location_session_rotation() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(ResponseTemplate::new(409).insert_header(SESSION_ID_HEADER, "rotated"))
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_set_location(&url, &creds, "old", 1, "/some/path", true).await;
+        assert!(matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "rotated"));
+    }
+
+    #[tokio::test]
+    async fn torrent_set_location_auth_failure() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = torrent_set_location(&url, &creds, "sid", 1, "/path", true).await;
+        assert!(matches!(result, Err(RpcError::AuthError)));
     }
 }

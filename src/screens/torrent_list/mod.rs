@@ -40,7 +40,21 @@ use sort::{SortColumn, SortDir};
 pub use add_dialog::FileReadResult;
 pub use update::update;
 pub use view::view;
+pub use view::view_context_menu_overlay;
 pub use worker::rpc_worker_stream;
+
+// ── SetLocationDialog ───────────────────────────────────────────────────────────────
+
+/// State for the "Set Data Location" modal dialog.
+#[derive(Debug, Clone)]
+pub struct SetLocationDialog {
+    pub torrent_id: i64,
+    /// Absolute path to set (prefilled from the torrent's `downloadDir`).
+    pub path: String,
+    /// When `true`, the daemon physically moves files to the new location;
+    /// when `false`, only the internal path record is updated.
+    pub move_data: bool,
+}
 
 // ── StatusFilter ──────────────────────────────────────────────────────────────
 
@@ -139,6 +153,31 @@ pub enum Message {
     BandwidthSaved(Result<(), String>),
     /// Fired by the toolbar turtle button — intercepted by main_screen.
     TurtleModeToggled,
+    // Context-menu flow
+    /// Sent on every mouse-move to track the cursor position for context-menu anchoring.
+    CursorMoved(iced::Point),
+    /// Right-click on a torrent row opens the context menu at the last cursor position.
+    TorrentRightClicked(i64),
+    /// Window was resized — used to keep edge-mitigation bounds up to date.
+    WindowResized {
+        width: f32,
+        height: f32,
+    },
+    /// Dismiss the open context menu (click-away or any action).
+    DismissContextMenu,
+    /// Start action chosen from the context menu.
+    ContextMenuStart(i64),
+    /// Pause action chosen from the context menu.
+    ContextMenuPause(i64),
+    /// Delete action chosen from the context menu.
+    ContextMenuDelete(i64),
+    /// "Set Data Location" chosen from the context menu — opens the modal dialog.
+    OpenSetLocation(i64),
+    // Set-location dialog
+    SetLocationPathChanged(String),
+    SetLocationMoveToggled,
+    SetLocationApply,
+    SetLocationCancel,
     // Escalated to parent — intercepted by MainScreen before reaching update()
     Disconnect,
     // Escalated to app — opens Settings screen
@@ -176,6 +215,16 @@ pub struct TorrentListScreen {
     pub sort_dir: SortDir,
     /// Active filter chips — only torrents matching at least one bucket are shown.
     pub filters: HashSet<StatusFilter>,
+    /// Most recent mouse cursor position, updated on every `CursorMoved` event.
+    pub last_cursor_position: iced::Point,
+    /// When `Some`, the context menu is open for the given torrent ID at the given point.
+    pub context_menu: Option<(i64, iced::Point)>,
+    /// When `Some`, the "Set Data Location" modal dialog is active.
+    pub set_location_dialog: Option<SetLocationDialog>,
+    /// Approximate window dimensions used for context-menu edge mitigation (px).
+    pub window_height: f32,
+    /// Approximate window width used for right-edge context-menu mitigation (px).
+    pub window_width: f32,
 }
 
 impl TorrentListScreen {
@@ -193,6 +242,11 @@ impl TorrentListScreen {
             sort_column: None,
             sort_dir: SortDir::Asc,
             filters: StatusFilter::all().into_iter().collect(),
+            last_cursor_position: iced::Point::ORIGIN,
+            context_menu: None,
+            set_location_dialog: None,
+            window_height: 800.0,
+            window_width: 900.0,
         }
     }
 
@@ -240,6 +294,28 @@ impl TorrentListScreen {
             } else {
                 None
             }
+        })
+    }
+
+    /// Subscription that tracks the global mouse cursor position.
+    ///
+    /// Always active — the `update()` handler for `CursorMoved` only stores the
+    /// point and returns `Task::none()`, so the cost per event is negligible.
+    pub fn cursor_subscription(&self) -> Subscription<Message> {
+        iced::event::listen_with(|event, _status, _id| match event {
+            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                Some(Message::CursorMoved(position))
+            }
+            iced::Event::Window(iced::window::Event::Opened { size, .. }) => {
+                Some(Message::WindowResized {
+                    width: size.width,
+                    height: size.height,
+                })
+            }
+            iced::Event::Window(iced::window::Event::Resized(iced::Size { width, height })) => {
+                Some(Message::WindowResized { width, height })
+            }
+            _ => None,
         })
     }
 }
@@ -927,5 +1003,163 @@ mod tests {
         let _ = update(&mut screen, Message::FilterToggled(StatusFilter::Paused));
         let _ = update(&mut screen, Message::FilterToggled(StatusFilter::Paused));
         assert_eq!(screen.filters.len(), original_len);
+    }
+
+    // ── Context menu handler tests ────────────────────────────────────────────
+
+    /// CursorMoved stores the point without changing other state.
+    #[test]
+    fn cursor_moved_stores_point() {
+        let mut screen = make_screen();
+        let pt = iced::Point::new(42.0, 100.0);
+        let _ = update(&mut screen, Message::CursorMoved(pt));
+        assert_eq!(screen.last_cursor_position, pt);
+        assert!(screen.context_menu.is_none());
+    }
+
+    /// TorrentRightClicked opens the context menu for the given id at last cursor pos.
+    #[test]
+    fn torrent_right_clicked_opens_context_menu() {
+        let mut screen = make_screen();
+        screen.torrents = vec![make_torrent(3, "Fedora")];
+        let pt = iced::Point::new(50.0, 80.0);
+        screen.last_cursor_position = pt;
+        let _ = update(&mut screen, Message::TorrentRightClicked(3));
+        assert_eq!(screen.context_menu, Some((3, pt)));
+    }
+
+    /// DismissContextMenu clears the menu.
+    #[test]
+    fn dismiss_context_menu_clears_state() {
+        let mut screen = make_screen();
+        screen.context_menu = Some((1, iced::Point::new(10.0, 10.0)));
+        let _ = update(&mut screen, Message::DismissContextMenu);
+        assert!(screen.context_menu.is_none());
+    }
+
+    /// ContextMenuDelete dismisses the menu and opens the delete confirmation dialog.
+    #[test]
+    fn context_menu_delete_dismisses_and_confirms() {
+        let mut screen = make_screen();
+        screen.context_menu = Some((7, iced::Point::ORIGIN));
+        let _ = update(&mut screen, Message::ContextMenuDelete(7));
+        assert!(screen.context_menu.is_none());
+        assert_eq!(screen.confirming_delete, Some((7, false)));
+    }
+
+    /// OpenSetLocation dismisses the menu and opens the dialog prefilled with downloadDir.
+    #[test]
+    fn open_set_location_opens_dialog_with_prefill() {
+        let mut screen = make_screen();
+        screen.torrents = vec![TorrentData {
+            id: 9,
+            name: "Arch".to_owned(),
+            status: 0,
+            download_dir: "/data/torrents".to_owned(),
+            ..Default::default()
+        }];
+        screen.context_menu = Some((9, iced::Point::ORIGIN));
+        let _ = update(&mut screen, Message::OpenSetLocation(9));
+        assert!(screen.context_menu.is_none());
+        let dlg = screen.set_location_dialog.expect("dialog should be open");
+        assert_eq!(dlg.torrent_id, 9);
+        assert_eq!(dlg.path, "/data/torrents");
+        assert!(dlg.move_data, "move_data defaults to true");
+    }
+
+    /// ContextMenuStart dismisses the menu and sets is_loading.
+    #[test]
+    fn context_menu_start_dismisses_and_enqueues() {
+        let mut screen = make_screen();
+        screen.context_menu = Some((4, iced::Point::ORIGIN));
+        let _ = update(&mut screen, Message::ContextMenuStart(4));
+        assert!(screen.context_menu.is_none());
+        assert!(screen.is_loading);
+    }
+
+    /// ContextMenuPause dismisses the menu and sets is_loading.
+    #[test]
+    fn context_menu_pause_dismisses_and_enqueues() {
+        let mut screen = make_screen();
+        screen.context_menu = Some((5, iced::Point::ORIGIN));
+        let _ = update(&mut screen, Message::ContextMenuPause(5));
+        assert!(screen.context_menu.is_none());
+        assert!(screen.is_loading);
+    }
+
+    // ── Set location dialog handler tests ─────────────────────────────────────
+
+    /// SetLocationPathChanged updates the path in the dialog.
+    #[test]
+    fn set_location_path_changed_updates_path() {
+        let mut screen = make_screen();
+        screen.set_location_dialog = Some(SetLocationDialog {
+            torrent_id: 1,
+            path: "/old".to_owned(),
+            move_data: true,
+        });
+        let _ = update(
+            &mut screen,
+            Message::SetLocationPathChanged("/new/path".to_owned()),
+        );
+        let dlg = screen.set_location_dialog.unwrap();
+        assert_eq!(dlg.path, "/new/path");
+    }
+
+    /// SetLocationMoveToggled flips the move_data flag.
+    #[test]
+    fn set_location_move_toggled_flips_flag() {
+        let mut screen = make_screen();
+        screen.set_location_dialog = Some(SetLocationDialog {
+            torrent_id: 1,
+            path: String::new(),
+            move_data: true,
+        });
+        let _ = update(&mut screen, Message::SetLocationMoveToggled);
+        assert!(!screen.set_location_dialog.as_ref().unwrap().move_data);
+        let _ = update(&mut screen, Message::SetLocationMoveToggled);
+        assert!(screen.set_location_dialog.as_ref().unwrap().move_data);
+    }
+
+    /// SetLocationCancel closes the dialog without dispatching any RPC.
+    #[test]
+    fn set_location_cancel_closes_dialog() {
+        let mut screen = make_screen();
+        screen.set_location_dialog = Some(SetLocationDialog {
+            torrent_id: 2,
+            path: "/some/path".to_owned(),
+            move_data: false,
+        });
+        let _ = update(&mut screen, Message::SetLocationCancel);
+        assert!(screen.set_location_dialog.is_none());
+        assert!(!screen.is_loading, "cancel must not trigger any RPC");
+    }
+
+    /// SetLocationApply with a non-empty path closes the dialog.
+    #[test]
+    fn set_location_apply_closes_dialog_with_valid_path() {
+        let mut screen = make_screen();
+        screen.set_location_dialog = Some(SetLocationDialog {
+            torrent_id: 3,
+            path: "/valid/path".to_owned(),
+            move_data: true,
+        });
+        let _ = update(&mut screen, Message::SetLocationApply);
+        assert!(screen.set_location_dialog.is_none());
+    }
+
+    /// SetLocationApply with an empty/whitespace-only path is a no-op.
+    #[test]
+    fn set_location_apply_noop_with_empty_path() {
+        let mut screen = make_screen();
+        screen.set_location_dialog = Some(SetLocationDialog {
+            torrent_id: 3,
+            path: "  ".to_owned(),
+            move_data: true,
+        });
+        let _ = update(&mut screen, Message::SetLocationApply);
+        // Dialog is cleared but no RPC is enqueued (sender is None so no panic).
+        assert!(screen.set_location_dialog.is_none());
+        assert!(!screen.is_loading);
     }
 }

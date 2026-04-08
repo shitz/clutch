@@ -45,6 +45,9 @@ bytes/s, shown as "—" when zero), ↑ Speed (human-readable bytes/s, shown as 
 "—" when no data uploaded), and Progress (color-coded progress bar). All human-readable formatting
 SHALL use the same helper functions as the detail inspector.
 
+Each torrent row SHALL be wrapped in an `iced::widget::mouse_area` that handles both left-click
+selection (`on_press`) and right-click to open the context menu (`on_right_press`).
+
 #### Scenario: Each matching torrent appears as a row
 
 - **WHEN** the app has received torrent data from the daemon
@@ -90,6 +93,11 @@ SHALL use the same helper functions as the detail inspector.
 
 - **WHEN** a torrent's status bucket does not match any chip in the active filter set
 - **THEN** no row is rendered for that torrent
+
+#### Scenario: Right-clicking a row opens the context menu
+
+- **WHEN** the user right-clicks a torrent row
+- **THEN** the context menu is opened for that torrent at the current cursor position
 
 ## ADDED Requirements
 

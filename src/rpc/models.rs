@@ -217,6 +217,29 @@ pub struct TorrentData {
     pub seed_ratio_mode: u8,
     #[serde(rename = "honorsSessionLimits", default = "default_true")]
     pub honors_session_limits: bool,
+    #[serde(rename = "downloadDir", default)]
+    pub download_dir: String,
+    /// Transmission error code: 0 = no error, non-zero = error.
+    #[serde(default)]
+    pub error: i32,
+    /// Human-readable error message from the daemon (empty when `error == 0`).
+    #[serde(rename = "errorString", default)]
+    pub error_string: String,
+}
+
+// ── Set-location arguments ───────────────────────────────────────────────────
+
+/// Arguments for a `torrent-set-location` RPC call.
+#[derive(Debug, Clone, Serialize)]
+pub struct SetLocationArgs {
+    /// Torrent IDs to relocate.
+    pub ids: Vec<i64>,
+    /// Absolute destination path on the daemon's filesystem.
+    pub location: String,
+    /// When `true`, the daemon physically moves the files; when `false`, it
+    /// only updates its internal path record without touching the data.
+    #[serde(rename = "move")]
+    pub move_data: bool,
 }
 
 // ── Add-torrent payload ───────────────────────────────────────────────────────
@@ -229,4 +252,54 @@ pub struct TorrentData {
 pub enum AddPayload {
     Magnet(String),
     Metainfo(String),
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// TorrentData correctly deserializes `downloadDir` from the JSON key used by Transmission.
+    #[test]
+    fn torrent_data_deserializes_download_dir() {
+        let json = serde_json::json!({
+            "id": 1,
+            "name": "Ubuntu",
+            "status": 4,
+            "percentDone": 0.5,
+            "downloadDir": "/data/torrents"
+        });
+        let t: TorrentData = serde_json::from_value(json).expect("deserialization failed");
+        assert_eq!(t.download_dir, "/data/torrents");
+    }
+
+    /// Missing `downloadDir` key defaults to an empty string instead of erroring.
+    #[test]
+    fn torrent_data_download_dir_defaults_to_empty() {
+        let json = serde_json::json!({
+            "id": 2,
+            "name": "Arch",
+            "status": 0,
+            "percentDone": 1.0
+        });
+        let t: TorrentData = serde_json::from_value(json).expect("deserialization failed");
+        assert_eq!(t.download_dir, "");
+    }
+
+    /// SetLocationArgs serializes `move` field with the correct JSON key.
+    #[test]
+    fn set_location_args_serializes_correctly() {
+        let args = SetLocationArgs {
+            ids: vec![42],
+            location: "/new/path".to_owned(),
+            move_data: true,
+        };
+        let v = serde_json::to_value(&args).unwrap();
+        assert_eq!(v["ids"][0], 42);
+        assert_eq!(v["location"], "/new/path");
+        assert_eq!(v["move"], true);
+        // The Rust field name must NOT appear in the JSON.
+        assert!(v.get("move_data").is_none());
+    }
 }

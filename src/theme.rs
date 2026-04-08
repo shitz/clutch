@@ -73,6 +73,8 @@ pub const ICON_SAVE: char = '\u{E161}';
 pub const ICON_UNDO: char = '\u{E166}';
 /// Material Icons "speed" glyph — used for the Turtle Mode toolbar toggle.
 pub const ICON_SPEED: char = '\u{E9E4}';
+/// Material Icons "folder" glyph — used for the Set Data Location context menu item.
+pub const ICON_FOLDER: char = '\u{E2C7}';
 
 // ── Checkbox icon codepoints ──────────────────────────────────────────────────
 
@@ -960,5 +962,77 @@ pub fn m3_filter_chip(theme: &Theme, status: button::Status, is_selected: bool) 
                 snap: false,
             },
         }
+    }
+}
+
+// ── Context menu styles ───────────────────────────────────────────────────────
+
+/// Floating context-menu card: matches the M3 menu surface spec.
+///
+/// Tighter corner radius than `m3_card` (4 dp) and a more prominent shadow to
+/// lift the menu above all other content.
+pub fn m3_menu_card(theme: &Theme) -> container::Style {
+    let is_dark = theme.extended_palette().background.base.color.r < 0.5;
+    let bg = if is_dark {
+        CARD_SURFACE_DARK
+    } else {
+        CARD_SURFACE_LIGHT
+    };
+    container::Style {
+        text_color: None,
+        background: Some(iced::Background::Color(bg)),
+        border: Border {
+            radius: 4.0.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        shadow: Shadow {
+            color: Color::from_rgba8(0, 0, 0, 0.30),
+            offset: Vector::new(0.0, 4.0),
+            blur_radius: 14.0,
+        },
+        snap: false,
+    }
+}
+
+/// M3 context-menu item button: transparent background with an 8 % state layer
+/// on hover. Zero border radius so the highlight spans edge to edge.
+pub fn m3_menu_item(theme: &Theme, status: button::Status) -> button::Style {
+    let text_color = theme.palette().text;
+    match status {
+        button::Status::Hovered | button::Status::Pressed => button::Style {
+            background: Some(iced::Background::Color(Color {
+                a: 0.08,
+                ..text_color
+            })),
+            text_color,
+            border: Border::default(),
+            shadow: Shadow::default(),
+            snap: false,
+        },
+        _ => button::Style {
+            background: None,
+            text_color,
+            border: Border::default(),
+            shadow: Shadow::default(),
+            snap: false,
+        },
+    }
+}
+
+/// M3 context-menu item button — disabled state: dimmed text, no hover effect.
+pub fn m3_menu_item_disabled(theme: &Theme, _status: button::Status) -> button::Style {
+    let is_dark = theme.extended_palette().background.base.color.r < 0.5;
+    let text_color = if is_dark {
+        DISABLED_DARK
+    } else {
+        DISABLED_LIGHT
+    };
+    button::Style {
+        background: None,
+        text_color,
+        border: Border::default(),
+        shadow: Shadow::default(),
+        snap: false,
     }
 }

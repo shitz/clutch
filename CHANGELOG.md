@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Active, Error) between the toolbar and column headers. Chips are multi-select; clicking a chip
   toggles its status bucket. The "All" chip selects or deselects all buckets at once. Each chip
   displays a real-time count of matching torrents derived from the full un-filtered list.
+- Right-click context menu on torrent rows with Start, Pause, Delete, and Set Data Location
+  actions.
+- Set Data Location: a new modal dialog to relocate a torrent's data on the daemon's
+  filesystem. The path input is prefilled with the torrent's current download directory. A
+  "Move data to new location" checkbox (default: on) controls whether the daemon physically
+  moves the files or only updates its internal path record.
+- The torrent inspector now displays the torrent's data path and any daemon-reported error message
+  in the General tab.
 
 ### Fixed
 

@@ -101,7 +101,8 @@ impl MainScreen {
         let tick = iced::time::every(interval).map(|_| Message::List(torrent_list::Message::Tick));
         let worker = Subscription::run(torrent_list::rpc_worker_stream).map(Message::List);
         let dialog_kb = self.list.dialog_subscription().map(Message::List);
-        Subscription::batch([tick, worker, dialog_kb])
+        let cursor = self.list.cursor_subscription().map(Message::List);
+        Subscription::batch([tick, worker, dialog_kb, cursor])
     }
 
     /// Route messages to the appropriate child; intercept cross-cutting concerns.
@@ -451,7 +452,7 @@ impl MainScreen {
         let list_elem =
             torrent_list::view(&self.list, theme_mode, alt_speed_enabled).map(Message::List);
 
-        match self.list.selected_torrent() {
+        let content: Element<Message> = match self.list.selected_torrent() {
             None => list_elem,
             Some(torrent) => {
                 let inspector_elem =
@@ -467,6 +468,14 @@ impl MainScreen {
                 ]
                 .into()
             }
+        };
+
+        // Lift the context menu overlay to this level so it can draw over the
+        // inspector panel (the torrent-list container alone is not tall enough).
+        if let Some(overlay) = torrent_list::view_context_menu_overlay(&self.list) {
+            iced::widget::stack![content, overlay.map(Message::List)].into()
+        } else {
+            content
         }
     }
 }

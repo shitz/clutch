@@ -64,6 +64,12 @@ pub enum RpcWork {
         torrent_id: i64,
         args: TorrentBandwidthArgs,
     },
+    SetLocation {
+        params: ConnectionParams,
+        torrent_id: i64,
+        location: String,
+        move_data: bool,
+    },
 }
 
 /// The typed outcome of one [`RpcWork`] item.
@@ -246,6 +252,37 @@ pub async fn execute_work(work: RpcWork) -> (Option<String>, RpcResult) {
                     (Some(new_id), RpcResult::BandwidthSet(r))
                 }
                 other => (None, RpcResult::BandwidthSet(other)),
+            }
+        }
+        RpcWork::SetLocation {
+            params: p,
+            torrent_id,
+            location,
+            move_data,
+        } => {
+            match api::torrent_set_location(
+                &p.url,
+                &p.credentials,
+                &p.session_id,
+                torrent_id,
+                &location,
+                move_data,
+            )
+            .await
+            {
+                Err(RpcError::SessionRotated(new_id)) => {
+                    let r = api::torrent_set_location(
+                        &p.url,
+                        &p.credentials,
+                        &new_id,
+                        torrent_id,
+                        &location,
+                        move_data,
+                    )
+                    .await;
+                    (Some(new_id), RpcResult::ActionDone(r))
+                }
+                other => (None, RpcResult::ActionDone(other)),
             }
         }
     }

@@ -19,7 +19,7 @@ use crate::rpc::{AddPayload, RpcWork};
 
 use super::add_dialog::{self, AddDialogState, FileReadResult, TorrentFileInfo};
 use super::sort::SortDir;
-use super::{Message, StatusFilter, TorrentListScreen};
+use super::{Message, SetLocationDialog, StatusFilter, TorrentListScreen};
 
 pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
     match msg {
@@ -384,6 +384,113 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
                 state.filters.clear();
             } else {
                 state.filters = StatusFilter::all().into_iter().collect();
+            }
+            Task::none()
+        }
+
+        // ── Cursor tracking ───────────────────────────────────────────────────
+        Message::CursorMoved(point) => {
+            state.last_cursor_position = point;
+            Task::none()
+        }
+
+        Message::WindowResized { width, height } => {
+            state.window_width = width;
+            state.window_height = height;
+            Task::none()
+        }
+
+        // ── Context menu ──────────────────────────────────────────────────────
+        Message::TorrentRightClicked(id) => {
+            state.context_menu = Some((id, state.last_cursor_position));
+            Task::none()
+        }
+
+        Message::DismissContextMenu => {
+            state.context_menu = None;
+            Task::none()
+        }
+
+        Message::ContextMenuStart(id) => {
+            state.context_menu = None;
+            tracing::info!(id, "Resuming torrent via context menu");
+            state.is_loading = true;
+            state.enqueue(RpcWork::TorrentStart {
+                params: state.params.clone(),
+                id,
+            });
+            Task::none()
+        }
+
+        Message::ContextMenuPause(id) => {
+            state.context_menu = None;
+            tracing::info!(id, "Pausing torrent via context menu");
+            state.is_loading = true;
+            state.enqueue(RpcWork::TorrentStop {
+                params: state.params.clone(),
+                id,
+            });
+            Task::none()
+        }
+
+        Message::ContextMenuDelete(id) => {
+            state.context_menu = None;
+            state.confirming_delete = Some((id, false));
+            Task::none()
+        }
+
+        Message::OpenSetLocation(id) => {
+            state.context_menu = None;
+            let dir = state
+                .torrents
+                .iter()
+                .find(|t| t.id == id)
+                .map(|t| t.download_dir.clone())
+                .unwrap_or_default();
+            state.set_location_dialog = Some(SetLocationDialog {
+                torrent_id: id,
+                path: dir,
+                move_data: true,
+            });
+            Task::none()
+        }
+
+        // ── Set data location dialog ──────────────────────────────────────────
+        Message::SetLocationPathChanged(s) => {
+            if let Some(dlg) = &mut state.set_location_dialog {
+                dlg.path = s;
+            }
+            Task::none()
+        }
+
+        Message::SetLocationMoveToggled => {
+            if let Some(dlg) = &mut state.set_location_dialog {
+                dlg.move_data = !dlg.move_data;
+            }
+            Task::none()
+        }
+
+        Message::SetLocationCancel => {
+            state.set_location_dialog = None;
+            Task::none()
+        }
+
+        Message::SetLocationApply => {
+            if let Some(dlg) = state.set_location_dialog.take()
+                && !dlg.path.trim().is_empty()
+            {
+                tracing::info!(
+                    torrent_id = dlg.torrent_id,
+                    path = %dlg.path,
+                    move_data = dlg.move_data,
+                    "Setting torrent data location"
+                );
+                state.enqueue(RpcWork::SetLocation {
+                    params: state.params.clone(),
+                    torrent_id: dlg.torrent_id,
+                    location: dlg.path,
+                    move_data: dlg.move_data,
+                });
             }
             Task::none()
         }
