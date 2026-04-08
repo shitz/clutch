@@ -1,6 +1,6 @@
 [package]
 name = "clutch"
-version = "0.11.0"
+version = "0.12.0"
 edition = "2024"
 
 [dependencies]
@@ -34,7 +34,7 @@ winres = "0.1"
 [package.metadata.packager]
 product-name = "Clutch"
 identifier = "com.github.shitz.clutch"
-description = "A transmission RPC client."
+description = "A modern transmission RPC client."
 authors = ["Samuel Hitz <samuel.hitz@gmail.com>"]
 homepage = "https://github.com/shitz/clutch"
 license-file = "LICENSE"

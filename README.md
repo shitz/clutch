@@ -13,39 +13,49 @@
   <img src="assets/screenshot_settings_dark.png" alt="Settings" width="32%"/>
 </p>
 
-A desktop GUI for [Transmission](https://transmissionbt.com/) built in Rust using
-[iced](https://github.com/iced-rs/iced). Connects to a remote Transmission daemon via its JSON-RPC
-API.
+A modern, material design based desktop GUI for [Transmission](https://transmissionbt.com/) built in
+Rust using [iced](https://github.com/iced-rs/iced). Connects to a remote Transmission daemon via its
+JSON-RPC API.
 
 ## Features
 
-- **Torrent list** — sortable columns (name, size, progress, ETA, speeds, ratio, status), responsive
-  even with hundreds of torrents
-- **Torrent detail inspector** — General, Files, Trackers, and Peers tabs
-- **Add torrents** — by magnet link or `.torrent` file
-- **Start / stop / remove** torrents
-- **Multiple connection profiles** — save and switch between Transmission instances
-- **Credential encryption** — passwords are encrypted at rest using Argon2id + ChaCha20-Poly1305
-- **Theme** — light, dark, and system-follow modes (Material Design 3)
-- **Selective download** — pick and choose which files in a torrent to download
-- **Configurable bandwidth limits** — global alternative speed limits (Turtle Mode) and per-torrent
-  limits for download/upload speed and seeding ratio
-- **Cross-platform** — macOS, Linux, and Windows (no GTK, no web views, pure Rust)
+- **Native & Lightweight** — Built in pure Rust using the `iced` GUI library. GPU-accelerated,
+  cross-platform, and entirely free from web-view or Electron memory bloat.
+- **Dynamic Filtering** — Multi-select filter chips allow you to quickly isolate torrents by state
+  (Downloading, Seeding, Active, Paused, Error) with real-time counts.
+- **Core Torrent Management** — Add (via magnet or file), start, pause, remove, and relocate torrent
+  data on the remote daemon directly from a right-click context menu.
+- **Detailed Inspector** — View tracker status, connected peers, and select specific files within a
+  torrent for download.
+- **Bandwidth Control** — Toggle global alternative speed limits (Turtle Mode) from the toolbar, or
+  set strict per-torrent download, upload, and seeding ratio caps.
+- **Multiple Connection Profiles** — Save and switch between different remote Transmission instances
+  seamlessly.
+- **Secure Storage** — Daemon passwords are encrypted at rest using Argon2id and ChaCha20-Poly1305.
+- **Material 3 Design** — Clean, responsive interface with light, dark, and system-follow themes,
+  built from the ground up for desktop UX.
 
 ## Why
 
-The available remote Transmission GUI clients are either dated in design or not actively maintained.
-[Remote Transmission GUI](https://github.com/transmission-remote-gui/transgui) works but looks its
-age. Clutch was built to be a clean, fast alternative that stays responsive with large torrent
-libraries.
+I wanted to create a modern, visually appealing, and highly responsive desktop client for managing
+Transmission daemons. Clutch provides a native desktop experience designed around modern
+Material 3 principles, without relying on heavy frameworks like Electron. Because it is written in
+Rust and adheres to a strict asynchronous UI architecture, the interface remains completely
+non-blocking and highly responsive, even when polling hundreds of torrents.
+
+While Clutch does not yet aim to replicate every niche feature of a 15-year-old client it is
+designed to handle the core remote management workflow flawlessly. It gives users a clean, secure,
+and resource-efficient way to control their seedboxes and home servers.
 
 ## Installation
 
-Pre-built installers are attached to every [GitHub Release](https://github.com/shitz/clutch/releases).
+Pre-built installers are attached to every [GitHub
+Release](https://github.com/shitz/clutch/releases).
 
 ### macOS (Apple Silicon)
 
-Download `Clutch_<version>_aarch64.dmg`, open it, and drag **Clutch.app** into your Applications folder.
+Download `Clutch_<version>_aarch64.dmg`, open it, and drag **Clutch.app** into your Applications
+folder.
 
 **Gatekeeper workaround:** Because Clutch is unsigned, macOS will refuse to open it with an "app is
 damaged" error. To bypass this, run the following command in Terminal after dragging it to
@@ -112,7 +122,7 @@ Pull requests are also welcome. A few ground rules:
 
 - **Disclose AI use.** If a PR was built with AI assistance, say so: include the model(s) used, the
   prompts or agentic workflow, and any relevant context.
-- **Bring specs for larger changes.** A non-trivial feature should ideally come with the associated
+- **Bring specs for larger changes.** A non-trivial feature should come with the associated
   OpenSpec artifacts (design doc, spec, task list) so the intent is clear and reviewable.
 - For smaller fixes and tweaks, a clear description of the problem and solution is enough.
 
