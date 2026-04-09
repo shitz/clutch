@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Context menu and modal overlays owned by the torrent list screen.
+
 use iced::widget::{Space, button, checkbox, column, container, mouse_area, row, stack, text};
 use iced::{Alignment, Element, Length};
 
@@ -127,6 +129,7 @@ pub fn view_context_menu_overlay(state: &TorrentListScreen) -> Option<Element<'_
     Some(stack![click_away, positioned].into())
 }
 
+/// Render the delete-confirmation dialog for the currently selected torrent.
 pub(crate) fn view_delete_dialog(name: &str, del_local: bool) -> Element<'_, Message> {
     let card = container(
         column![
@@ -164,6 +167,7 @@ pub(crate) fn view_delete_dialog(name: &str, del_local: bool) -> Element<'_, Mes
         .into()
 }
 
+/// Render the set-location dialog for the selected torrent.
 pub(crate) fn view_set_location_dialog(dlg: &SetLocationDialog) -> Element<'_, Message> {
     use iced::widget::text_input;
 

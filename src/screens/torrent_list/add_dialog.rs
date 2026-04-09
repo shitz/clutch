@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Add-torrent dialog state and rendering helpers.
+
 use iced::widget::{button, column, container, row, scrollable, text, text_input};
 use iced::{Element, Length};
 
@@ -79,6 +81,7 @@ fn format_file_size(bytes: u64) -> String {
     }
 }
 
+/// Render the add-torrent dialog for the current `AddDialogState`.
 pub fn view_add_dialog(state: &AddDialogState) -> Element<'_, Message> {
     let (title_str, input_area): (&str, Element<'_, Message>) = match state {
         AddDialogState::AddLink {

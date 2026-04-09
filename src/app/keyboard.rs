@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Keyboard subscriptions for the connection and settings form screens.
+
 use iced::Subscription;
 use iced::keyboard::{Event, Key, key::Named};
 
@@ -25,6 +27,7 @@ enum FormScreen {
     Settings,
 }
 
+/// Build the active keyboard subscription for the current top-level screen.
 pub(super) fn subscription(state: &AppState) -> Subscription<Message> {
     let dialog_active = state.active_dialog.is_some();
 

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Toolbar rendering for the torrent list screen.
+
 use iced::widget::tooltip;
 use iced::widget::{Space, row, text};
 use iced::{Alignment, Element, Length};
@@ -23,6 +25,7 @@ use crate::theme::{
 
 use super::{Message, TorrentListScreen};
 
+/// Render the primary torrent-list toolbar and its action groups.
 pub(crate) fn view_normal_toolbar(
     state: &TorrentListScreen,
     alt_speed_enabled: bool,

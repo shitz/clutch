@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! View rendering for the settings screen.
+
 use iced::widget::{
     Space, button, column, container, opaque, row, scrollable, stack, text, text_input, toggler,
     tooltip,
@@ -25,6 +27,7 @@ use super::state::SettingsScreen;
 use super::{Message, SettingsTab, prof_ring_id};
 
 impl SettingsScreen {
+    /// Render the settings screen and any active modal overlays.
     pub fn view(&self) -> Element<'_, Message> {
         let main_content = column![
             self.view_header(),

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Widget-tree orchestration and row rendering for the torrent list screen.
+
 use iced::widget::rule;
 use iced::widget::{
     Space, button, column, container, mouse_area, opaque, progress_bar, row, scrollable, stack,
@@ -85,6 +87,7 @@ fn filter_chip(
         .into()
 }
 
+/// Render the torrent list screen, including overlays owned by the list itself.
 pub fn view(
     state: &TorrentListScreen,
     _theme_mode: crate::app::ThemeMode,
@@ -329,8 +332,5 @@ pub fn view(
         after_delete
     };
 
-    // ── Context menu overlay ──────────────────────────────────────────────────
-    // Rendered at the main_screen level via `view_context_menu_overlay` so it
-    // can draw over the inspector panel. Nothing to do here.
     after_set_location
 }

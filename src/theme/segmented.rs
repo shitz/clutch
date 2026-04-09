@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Shared segmented-control rendering for mutually exclusive option groups.
+
 use iced::widget::{button, row};
 use iced::{Border, Color, Element, Length, Shadow, Theme};
 

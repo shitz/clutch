@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Checkbox-like selection widgets built from Material Icons glyphs.
+
 use iced::Element;
 use iced::widget::row;
 

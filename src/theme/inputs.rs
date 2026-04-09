@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Shared text-input styles for the theme layer.
+
 use iced::widget::text_input;
 use iced::{Border, Color, Theme};
 

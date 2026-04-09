@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Startup flow and app-level routing helpers for the root application state.
+
 use secrecy::ExposeSecret;
 use uuid::Uuid;
 
@@ -26,6 +28,7 @@ use crate::screens::settings::{SettingsScreen, SettingsTab};
 
 use super::{AppState, Message, Screen};
 
+/// Handle startup-only messages before normal screen dispatch begins.
 pub(super) fn handle_startup_message(
     state: &mut AppState,
     message: &Message,
@@ -37,6 +40,7 @@ pub(super) fn handle_startup_message(
     }
 }
 
+/// Handle top-level messages that reroute screens or trigger app-wide side effects.
 pub(super) fn handle_global_message(
     state: &mut AppState,
     message: &Message,
@@ -67,6 +71,7 @@ pub(super) fn handle_global_message(
     }
 }
 
+/// Forward connection-screen messages and reconcile successful connects into `AppState`.
 pub(super) fn handle_connection_message(state: &mut AppState, message: Message) -> Task<Message> {
     let (task, opt_success) = match (&mut state.screen, message) {
         (Screen::Connection(connection), Message::Connection(msg)) => connection.update(msg),
@@ -129,6 +134,7 @@ pub(super) fn handle_connection_message(state: &mut AppState, message: Message) 
     task.map(Message::Connection)
 }
 
+/// Build a `session-set` task when a profile stores non-default bandwidth settings.
 pub(super) fn make_push_bandwidth_task(
     url: &str,
     credentials: &TransmissionCredentials,
@@ -176,6 +182,7 @@ pub(super) fn make_push_bandwidth_task(
     ))
 }
 
+/// Resolve a profile into runtime credentials using the unlocked passphrase, if present.
 pub(super) fn profile_credentials(
     state: &AppState,
     profile: &ConnectionProfile,
@@ -188,6 +195,7 @@ pub(super) fn profile_credentials(
     )
 }
 
+/// Probe a saved profile by issuing a background `session-get` request.
 pub(super) fn probe_profile(state: &AppState, profile_id: Uuid) -> Task<Message> {
     let Some(profile) = state.profiles.get(profile_id) else {
         return Task::none();
@@ -205,6 +213,7 @@ pub(super) fn probe_profile(state: &AppState, profile_id: Uuid) -> Task<Message>
     )
 }
 
+/// Rebuild the connection launchpad and return any initial focus task it requires.
 pub(super) fn show_connection_launchpad(state: &mut AppState) -> Task<Message> {
     let connection = ConnectionScreen::new_launchpad(&state.profiles.profiles);
     let focus = connection.initial_focus_task().map(Message::Connection);
@@ -212,6 +221,7 @@ pub(super) fn show_connection_launchpad(state: &mut AppState) -> Task<Message> {
     focus
 }
 
+/// Stash the current main screen, if any, and switch to the settings screen.
 pub(super) fn open_settings(state: &mut AppState, tab: SettingsTab) {
     if let Screen::Main(_) = &state.screen {
         if let Screen::Main(main) = std::mem::replace(

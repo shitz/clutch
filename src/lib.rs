@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Library crate for Clutch.
+//!
+//! This crate exposes the app shell, screen modules, RPC client, profile
+//! persistence, formatting helpers, and shared theme layer used by the desktop
+//! binary.
+
 pub mod app;
 pub mod auth;
 pub mod crypto;

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Error types returned by the Transmission RPC layer.
+
 /// Errors that can occur when communicating with the Transmission daemon.
 #[derive(Debug, Clone)]
 pub enum RpcError {

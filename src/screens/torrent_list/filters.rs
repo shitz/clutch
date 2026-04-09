@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Filtering and count helpers for torrent-list status chips.
+
 use std::collections::HashSet;
 
 use crate::rpc::TorrentData;
@@ -19,6 +21,7 @@ use crate::rpc::TorrentData;
 use super::StatusFilter;
 use super::sort::{SortColumn, SortDir, sort_torrents};
 
+/// Aggregate counts for the torrent-list status filter chips.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FilterCounts {
     pub downloading: u32,
@@ -49,6 +52,7 @@ pub fn matching_filters(t: &TorrentData) -> Vec<StatusFilter> {
     out
 }
 
+/// Count how many torrents belong to each status-filter bucket.
 pub(crate) fn count_filters(torrents: &[TorrentData]) -> FilterCounts {
     let mut counts = FilterCounts::default();
 
@@ -67,6 +71,7 @@ pub(crate) fn count_filters(torrents: &[TorrentData]) -> FilterCounts {
     counts
 }
 
+/// Return whether a torrent should remain visible under the current filter set.
 pub(crate) fn torrent_matches_active_filters(
     torrent: &TorrentData,
     active_filters: &HashSet<StatusFilter>,
@@ -76,6 +81,7 @@ pub(crate) fn torrent_matches_active_filters(
         .any(|filter| active_filters.contains(filter))
 }
 
+/// Sort the list, then retain only the torrents allowed by the active filters.
 pub(crate) fn display_torrents<'a>(
     torrents: &'a [TorrentData],
     sort_column: Option<SortColumn>,

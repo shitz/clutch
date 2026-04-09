@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Top-level screen modules for the Clutch application shell.
+
 pub mod connection;
 pub mod inspector;
 pub mod main_screen;

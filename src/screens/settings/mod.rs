@@ -243,7 +243,7 @@ mod tests {
         assert!(result.is_none(), "save should be blocked");
     }
 
-    /// R13: GuardDiscard + Close must return SettingsResult::Closed.
+    /// `GuardDiscard` with a pending close returns `SettingsResult::Closed`.
     #[test]
     fn guard_discard_close_returns_closed() {
         let (mut s, _) = screen_with_selected_profile();

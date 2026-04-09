@@ -336,7 +336,7 @@ mod tests {
         }
     }
 
-    /// 6.1 – Tick when is_loading=true: no command, state unchanged.
+    /// Tick is ignored when `is_loading` is already true.
     #[test]
     fn tick_ignored_when_loading() {
         let mut screen = make_screen();
@@ -345,7 +345,7 @@ mod tests {
         assert!(screen.is_loading);
     }
 
-    /// 6.2 – Tick when is_loading=false: is_loading becomes true.
+    /// Tick starts a load when the screen is idle.
     #[test]
     fn tick_fires_when_not_loading() {
         let mut screen = make_screen();
@@ -354,7 +354,7 @@ mod tests {
         assert!(screen.is_loading);
     }
 
-    /// 6.3 – TorrentsUpdated(Ok) replaces torrents and clears is_loading.
+    /// `TorrentsUpdated(Ok)` replaces torrents and clears `is_loading`.
     #[test]
     fn torrents_updated_ok_replaces_and_clears_loading() {
         let mut screen = make_screen();
@@ -366,7 +366,7 @@ mod tests {
         assert_eq!(screen.torrents[0].name, "Ubuntu ISO");
     }
 
-    /// 6.4 – TorrentsUpdated(Err) clears is_loading and sets error.
+    /// `TorrentsUpdated(Err)` clears `is_loading` and stores the error.
     #[test]
     fn torrents_updated_err_clears_loading_and_sets_error() {
         let mut screen = make_screen();
@@ -379,7 +379,7 @@ mod tests {
         assert_eq!(screen.error.as_deref(), Some("timeout"));
     }
 
-    /// 6.5 – SessionIdRotated updates the stored session id.
+    /// `SessionIdRotated` updates the stored session ID.
     #[test]
     fn session_id_rotated_updates_id() {
         let mut screen = make_screen();
@@ -390,7 +390,7 @@ mod tests {
         assert_eq!(screen.params.session_id, "new-id-xyz");
     }
 
-    /// 8.1 – TorrentSelected toggles selected_id correctly.
+    /// `TorrentSelected` toggles `selected_id` correctly.
     #[test]
     fn torrent_selected_toggles() {
         let mut screen = make_screen();
@@ -406,7 +406,7 @@ mod tests {
         assert_eq!(screen.selected_id, None);
     }
 
-    /// 12.1 – selected_torrent() returns the matching TorrentData when selected.
+    /// `selected_torrent()` returns the matching torrent when selected.
     #[test]
     fn selected_torrent_returns_correct_entry() {
         let mut screen = make_screen();
@@ -417,14 +417,14 @@ mod tests {
         assert_eq!(t.name, "Beta");
     }
 
-    /// 12.1b – selected_torrent() returns None when nothing is selected.
+    /// `selected_torrent()` returns `None` when nothing is selected.
     #[test]
     fn selected_torrent_none_when_no_selection() {
         let screen = make_screen();
         assert!(screen.selected_torrent().is_none());
     }
 
-    /// 8.3 – DeleteClicked sets confirming_delete.
+    /// `DeleteClicked` arms the delete-confirmation state.
     #[test]
     fn delete_clicked_sets_confirming() {
         let mut screen = make_screen();
@@ -434,7 +434,7 @@ mod tests {
         assert_eq!(screen.confirming_delete, Some((5, false)));
     }
 
-    /// 8.3 – DeleteClicked when nothing is selected is a no-op.
+    /// `DeleteClicked` is a no-op when nothing is selected.
     #[test]
     fn delete_clicked_no_selection_is_noop() {
         let mut screen = make_screen();
@@ -442,7 +442,7 @@ mod tests {
         assert_eq!(screen.confirming_delete, None);
     }
 
-    /// 8.4 – DeleteCancelled clears confirming_delete.
+    /// `DeleteCancelled` clears the delete-confirmation state.
     #[test]
     fn delete_cancelled_clears_confirming() {
         let mut screen = make_screen();
@@ -451,7 +451,7 @@ mod tests {
         assert_eq!(screen.confirming_delete, None);
     }
 
-    /// 8.5 – DeleteConfirmed fires a task and clears confirming_delete.
+    /// `DeleteConfirmed` clears the dialog state and starts a delete action.
     #[test]
     fn delete_confirmed_clears_confirming_and_loads() {
         let mut screen = make_screen();
@@ -461,7 +461,7 @@ mod tests {
         assert!(screen.is_loading);
     }
 
-    /// 8.5 – DeleteConfirmed when confirming_delete is None is a no-op.
+    /// `DeleteConfirmed` is a no-op when no delete confirmation is active.
     #[test]
     fn delete_confirmed_no_state_is_noop() {
         let mut screen = make_screen();
@@ -469,7 +469,7 @@ mod tests {
         assert!(!screen.is_loading);
     }
 
-    /// 8.6 – DeleteLocalDataToggled updates checkbox state.
+    /// `DeleteLocalDataToggled` updates the checkbox state.
     #[test]
     fn delete_local_data_toggled_updates_state() {
         let mut screen = make_screen();
@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(screen.confirming_delete, Some((9, false)));
     }
 
-    /// 8.7 – ActionCompleted(Ok) keeps is_loading=true and fires a poll task.
+    /// `ActionCompleted(Ok)` keeps loading active and triggers a refresh.
     #[test]
     fn action_completed_ok_fires_refresh() {
         let mut screen = make_screen();
@@ -489,7 +489,7 @@ mod tests {
         assert!(screen.is_loading);
     }
 
-    /// 8.8 – ActionCompleted(Err) clears is_loading and stores error.
+    /// `ActionCompleted(Err)` clears loading and stores the error.
     #[test]
     fn action_completed_err_clears_and_stores_error() {
         let mut screen = make_screen();
@@ -502,7 +502,7 @@ mod tests {
         assert_eq!(screen.error.as_deref(), Some("daemon refused"));
     }
 
-    /// 8.9 – Poll tick is ignored while is_loading is true.
+    /// Poll tick is ignored while an action is still in flight.
     #[test]
     fn tick_ignored_while_action_in_flight() {
         let mut screen = make_screen();
@@ -512,9 +512,9 @@ mod tests {
         assert!(screen.is_loading);
     }
 
-    // ── 9.x  add-torrent dialog tests ─────────────────────────────────────────
+    // ── Add-torrent dialog tests ─────────────────────────────────────────────
 
-    /// 9.1 – AddLinkClicked transitions add_dialog to AddLink.
+    /// `AddLinkClicked` opens the add-link dialog.
     #[test]
     fn add_link_clicked_opens_add_link_dialog() {
         let mut screen = make_screen();
@@ -522,7 +522,7 @@ mod tests {
         assert!(matches!(screen.add_dialog, AddDialogState::AddLink { .. }));
     }
 
-    /// 9.2 – AddConfirmed with empty magnet is a no-op.
+    /// `AddConfirmed` is a no-op when the magnet input is empty.
     #[test]
     fn add_confirmed_empty_magnet_is_noop() {
         let mut screen = make_screen();
@@ -535,7 +535,7 @@ mod tests {
         assert!(matches!(screen.add_dialog, AddDialogState::AddLink { .. }));
     }
 
-    /// 9.3 – AddConfirmed with a valid magnet sets is_loading=true.
+    /// `AddConfirmed` with a valid magnet starts loading.
     #[test]
     fn add_confirmed_valid_magnet_emits_task() {
         let mut screen = make_screen();
@@ -548,7 +548,7 @@ mod tests {
         assert!(screen.is_loading);
     }
 
-    /// 9.4 – AddCancelled resets add_dialog to Hidden.
+    /// `AddCancelled` closes the add dialog.
     #[test]
     fn add_cancelled_closes_dialog() {
         let mut screen = make_screen();
@@ -561,7 +561,7 @@ mod tests {
         assert!(matches!(screen.add_dialog, AddDialogState::Hidden));
     }
 
-    /// 9.5 – TorrentFileRead(Ok) opens AddFile dialog with the correct file list.
+    /// `TorrentFileRead(Ok)` opens the add-file dialog with the parsed files.
     #[test]
     fn torrent_file_read_ok_opens_add_file_dialog() {
         let mut screen = make_screen();
@@ -582,7 +582,7 @@ mod tests {
         }
     }
 
-    /// 9.6 – AddCompleted(Ok) clears the dialog and fires an immediate torrent-get.
+    /// `AddCompleted(Ok)` clears the dialog and triggers an immediate refresh.
     #[test]
     fn add_completed_ok_clears_dialog_and_polls() {
         let mut screen = make_screen();
@@ -596,7 +596,7 @@ mod tests {
         assert!(screen.is_loading);
     }
 
-    /// 9.7 – AddCompleted(Err) stores the error inside the dialog without closing it.
+    /// `AddCompleted(Err)` stores the error inside the dialog without closing it.
     #[test]
     fn add_completed_err_stores_error_in_dialog() {
         let mut screen = make_screen();
@@ -617,7 +617,7 @@ mod tests {
         }
     }
 
-    /// 11.1 – ColumnHeaderClicked cycles Unsorted → Asc → Desc → Unsorted.
+    /// `ColumnHeaderClicked` cycles unsorted, ascending, descending, then unsorted.
     #[test]
     fn column_header_clicked_cycles_sort() {
         let mut screen = make_screen();
@@ -635,7 +635,7 @@ mod tests {
         assert_eq!(screen.sort_column, None);
     }
 
-    /// 11.2 – Clicking a different column starts Asc on the new column.
+    /// Clicking a different column starts ascending order on the new column.
     #[test]
     fn column_header_clicked_different_column_resets() {
         let mut screen = make_screen();
@@ -771,7 +771,7 @@ mod tests {
         assert!(!screen.is_loading);
     }
 
-    // ── 5.4 – Selective file selection ───────────────────────────────────────
+    // ── Selective file selection ─────────────────────────────────────────────
 
     fn make_add_file_screen(n: usize) -> TorrentListScreen {
         let mut screen = make_screen();
@@ -791,13 +791,13 @@ mod tests {
         screen
     }
 
-    /// 5.4a – AddDialogSelectAll sets every entry in `selected` to `true`.
+    /// `AddDialogSelectAll` sets every entry in `selected` to `true`.
     #[test]
     fn add_dialog_select_all_sets_all_true() {
         let mut screen = make_add_file_screen(3);
-        // Deselect one first.
+        // Deselect one entry first.
         let _ = update(&mut screen, Message::AddDialogFileToggled(1));
-        // Select all.
+        // Then select all.
         let _ = update(&mut screen, Message::AddDialogSelectAll);
         if let AddDialogState::AddFile { selected, .. } = &screen.add_dialog {
             assert_eq!(selected, &vec![true, true, true]);
@@ -806,7 +806,7 @@ mod tests {
         }
     }
 
-    /// 5.4b – AddDialogDeselectAll sets every entry in `selected` to `false`.
+    /// `AddDialogDeselectAll` sets every entry in `selected` to `false`.
     #[test]
     fn add_dialog_deselect_all_sets_all_false() {
         let mut screen = make_add_file_screen(3);
@@ -818,7 +818,7 @@ mod tests {
         }
     }
 
-    /// 5.4c – AddDialogFileToggled flips only the targeted index.
+    /// `AddDialogFileToggled` flips only the targeted index.
     #[test]
     fn add_dialog_file_toggled_flips_single_index() {
         let mut screen = make_add_file_screen(3);

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Reconcile `SettingsScreen` results back into the root `AppState`.
+
 use secrecy::ExposeSecret;
 
 use iced::Task;
@@ -27,6 +29,7 @@ use super::routing::{
 };
 use super::{AppState, Message, Screen};
 
+/// Forward settings messages and apply any returned `SettingsResult` to `AppState`.
 pub(super) fn handle_message(state: &mut AppState, message: Message) -> Task<Message> {
     let (task, opt_result) = match (&mut state.screen, message) {
         (Screen::Settings(settings), Message::Settings(msg)) => settings.update(msg),

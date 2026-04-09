@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Button styles and icon-button helpers for the shared theme layer.
+
 use iced::widget::{button, container};
 use iced::{Border, Color, Element, Length, Shadow, Theme};
 

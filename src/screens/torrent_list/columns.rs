@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Column-header rendering and shared width constants for the torrent list.
+
 use iced::widget::tooltip;
 use iced::widget::{button, container, row, text};
 use iced::{Alignment, Element, Length};
@@ -30,6 +32,7 @@ pub(crate) const W_RATIO: f32 = 64.0;
 pub(crate) const W_PROGRESS: f32 = 130.0;
 pub(crate) const SCROLLBAR_WIDTH: f32 = 14.0;
 
+/// Render the sticky column header row and sort controls.
 pub(crate) fn view_column_header(state: &TorrentListScreen) -> Element<'_, Message> {
     let header_row = row![
         container(

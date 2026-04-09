@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Elm update logic for the torrent list screen.
+
 use base64::Engine as _;
 use iced::Task;
 
@@ -21,6 +23,7 @@ use super::add_dialog::{self, AddDialogState, FileReadResult, TorrentFileInfo};
 use super::sort::SortDir;
 use super::{Message, SetLocationDialog, StatusFilter, TorrentListScreen};
 
+/// Apply a single torrent-list message to the screen state and return follow-up work.
 pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
     match msg {
         // ── Polling ───────────────────────────────────────────────────────────

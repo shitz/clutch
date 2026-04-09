@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Progress-bar styles keyed by torrent activity state.
+
 use iced::widget::progress_bar;
 use iced::{Border, Color, Theme};
 

@@ -655,7 +655,7 @@ fn view_options(opts: &InspectorOptionsState) -> Element<'_, Message> {
 mod tests {
     use super::*;
 
-    /// 12.2 – TabSelected updates active_tab.
+    /// `TabSelected` updates `active_tab`.
     #[test]
     fn tab_selected_updates_active() {
         let mut screen = InspectorScreen::new();
@@ -674,9 +674,9 @@ mod tests {
         assert_eq!(screen.active_tab, ActiveTab::General);
     }
 
-    // ── 5.5-5.8 – Selective file download (inspector) ────────────────────────
+    // ── Selective file download (inspector) ─────────────────────────────────
 
-    /// 5.5 – FileWantedToggled inserts the toggled index into `pending_wanted`.
+    /// `FileWantedToggled` inserts the toggled index into `pending_wanted`.
     #[test]
     fn file_wanted_toggled_updates_pending() {
         let mut screen = InspectorScreen::new();
@@ -692,7 +692,7 @@ mod tests {
         assert!(!screen.pending_wanted.contains_key(&0));
     }
 
-    /// 5.6 – FileWantedSetSuccess removes only the specified indices, leaving others intact.
+    /// `FileWantedSetSuccess` removes only the specified indices.
     #[test]
     fn file_wanted_set_success_clears_only_specified_indices() {
         let mut screen = InspectorScreen::new();
@@ -723,7 +723,7 @@ mod tests {
         );
     }
 
-    /// 5.7 – AllFilesWantedToggled inserts all indices into `pending_wanted`.
+    /// `AllFilesWantedToggled` inserts all indices into `pending_wanted`.
     #[test]
     fn all_files_wanted_toggled_populates_all_indices() {
         let mut screen = InspectorScreen::new();
@@ -744,8 +744,8 @@ mod tests {
         }
     }
 
-    /// 5.8 – The inspector `Message` enum has no variant that would clear
-    /// `pending_wanted` on a background poll. Verified structurally: calling
+    /// The inspector `Message` enum has no variant that would clear
+    /// `pending_wanted` on a background poll. Calling
     /// `TabSelected` (a non-file message) leaves `pending_wanted` unchanged.
     #[test]
     fn poll_does_not_clear_pending_wanted() {

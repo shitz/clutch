@@ -128,7 +128,7 @@ mod tests {
         }
     }
 
-    /// 7.1 – A 409 response must yield SessionRotated with the new session id.
+    /// A 409 response yields `SessionRotated` with the new session ID.
     #[tokio::test]
     async fn post_rpc_409_returns_session_rotated() {
         let server = MockServer::start().await;

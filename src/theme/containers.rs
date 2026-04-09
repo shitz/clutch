@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Container and surface styles used across Clutch screens and dialogs.
+
 use iced::widget::container;
 use iced::{Border, Color, Shadow, Theme, Vector};
 
