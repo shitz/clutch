@@ -56,15 +56,17 @@ pub fn matching_filters(t: &TorrentData) -> Vec<StatusFilter> {
 pub(crate) fn count_filters(torrents: &[TorrentData]) -> FilterCounts {
     let mut counts = FilterCounts::default();
 
-    for torrent in torrents {
-        for filter in matching_filters(torrent) {
-            match filter {
-                StatusFilter::Downloading => counts.downloading += 1,
-                StatusFilter::Seeding => counts.seeding += 1,
-                StatusFilter::Paused => counts.paused += 1,
-                StatusFilter::Active => counts.active += 1,
-                StatusFilter::Error => counts.error += 1,
-            }
+    for t in torrents {
+        // Inline the matching logic to avoid per-torrent Vec allocation.
+        match t.status {
+            3 | 4 => counts.downloading += 1,
+            5 | 6 => counts.seeding += 1,
+            0 => counts.paused += 1,
+            1 | 2 => counts.error += 1,
+            _ => {}
+        }
+        if t.rate_download > 0 || t.rate_upload > 0 {
+            counts.active += 1;
         }
     }
 
@@ -76,9 +78,17 @@ pub(crate) fn torrent_matches_active_filters(
     torrent: &TorrentData,
     active_filters: &HashSet<StatusFilter>,
 ) -> bool {
-    matching_filters(torrent)
-        .iter()
-        .any(|filter| active_filters.contains(filter))
+    // Inline the matching logic to avoid per-torrent Vec allocation.
+    let status_match = match torrent.status {
+        3 | 4 => active_filters.contains(&StatusFilter::Downloading),
+        5 | 6 => active_filters.contains(&StatusFilter::Seeding),
+        0 => active_filters.contains(&StatusFilter::Paused),
+        1 | 2 => active_filters.contains(&StatusFilter::Error),
+        _ => false,
+    };
+    let active_match = (torrent.rate_download > 0 || torrent.rate_upload > 0)
+        && active_filters.contains(&StatusFilter::Active);
+    status_match || active_match
 }
 
 /// Sort the list, then retain only the torrents allowed by the active filters.
