@@ -106,11 +106,23 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
                 }
                 state.selection_anchor = Some(id);
             } else {
-                // Plain click: replace selection, set anchor.
-                state.selected_ids.clear();
-                state.selected_ids.insert(id);
-                state.selection_anchor = Some(id);
+                // Plain click: if this torrent is already the only selection,
+                // deselect it; otherwise narrow the selection to just this one.
+                if state.selected_ids.len() == 1 && state.selected_ids.contains(&id) {
+                    state.selected_ids.clear();
+                    state.selection_anchor = None;
+                } else {
+                    state.selected_ids.clear();
+                    state.selected_ids.insert(id);
+                    state.selection_anchor = Some(id);
+                }
             }
+            Task::none()
+        }
+
+        Message::ClearSelection => {
+            state.selected_ids.clear();
+            state.selection_anchor = None;
             Task::none()
         }
 

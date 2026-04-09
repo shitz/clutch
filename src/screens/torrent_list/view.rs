@@ -162,9 +162,6 @@ pub fn view(
     let is_filter_empty =
         state.initial_load_done && !state.torrents.is_empty() && display.is_empty();
 
-    // Capture the last visible torrent ID before consuming the iterator so
-    // that clicking in the empty space below the rows can select it.
-    let last_visible_id: Option<i64> = display.last().map(|t| t.id);
     let display = display_torrents(
         &state.torrents,
         state.sort_column,
@@ -295,6 +292,7 @@ pub fn view(
         // full-size mouse_area sits behind it (bottom layer) and catches
         // clicks that fall into the empty space below the last row — where
         // the scrollable has no interactive child to capture the event.
+        // Pressing in that empty space clears the current selection.
         let row_scroller: Element<Message> =
             scrollable(container(column(rows).spacing(4)).padding(iced::Padding {
                 top: 0.0,
@@ -310,13 +308,10 @@ pub fn view(
             ))
             .into();
 
-        let background: Element<Message> = if let Some(last_id) = last_visible_id {
+        let background: Element<Message> =
             mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
-                .on_press(Message::TorrentSelected(last_id))
-                .into()
-        } else {
-            Space::new().width(Length::Fill).height(Length::Fill).into()
-        };
+                .on_press(Message::ClearSelection)
+                .into();
 
         stack![background, row_scroller]
             .width(Length::Fill)

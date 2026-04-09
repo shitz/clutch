@@ -113,6 +113,8 @@ pub enum Message {
     RpcWorkerReady(mpsc::Sender<RpcWork>),
     // Row selection
     TorrentSelected(i64),
+    /// Clicking empty space below the torrent rows clears the selection.
+    ClearSelection,
     // Toolbar actions
     PauseClicked,
     ResumeClicked,
@@ -458,7 +460,8 @@ mod tests {
         assert_eq!(screen.params.session_id, "new-id-xyz");
     }
 
-    /// `TorrentSelected` (plain click) selects the torrent correctly.
+    /// `TorrentSelected` (plain click) selects the torrent, switches between
+    /// torrents, and deselects when the same singly-selected torrent is clicked.
     #[test]
     fn torrent_selected_toggles() {
         let mut screen = make_screen();
@@ -467,8 +470,27 @@ mod tests {
         let _ = update(&mut screen, Message::TorrentSelected(1));
         assert!(screen.selected_ids.contains(&1));
 
+        // Switching to another torrent narrows to that one.
         let _ = update(&mut screen, Message::TorrentSelected(2));
         assert!(screen.selected_ids.contains(&2));
+        assert!(!screen.selected_ids.contains(&1));
+
+        // Plain-clicking the sole selected torrent deselects it.
+        let _ = update(&mut screen, Message::TorrentSelected(2));
+        assert!(screen.selected_ids.is_empty());
+    }
+
+    /// `ClearSelection` clears all selected ids and resets the anchor.
+    #[test]
+    fn clear_selection_clears_all() {
+        let mut screen = make_screen();
+        screen.torrents = vec![make_torrent(1, "A"), make_torrent(2, "B")];
+        screen.selected_ids = [1, 2].into_iter().collect();
+        screen.selection_anchor = Some(1);
+
+        let _ = update(&mut screen, Message::ClearSelection);
+        assert!(screen.selected_ids.is_empty());
+        assert!(screen.selection_anchor.is_none());
     }
 
     /// `selected_torrent()` returns the matching torrent when exactly one is selected.

@@ -735,7 +735,7 @@ mod tests {
         );
     }
 
-    /// Selecting the same torrent (deselects) does not reset the tab.
+    /// Deselecting a torrent (plain-click on the sole selection) does not reset the tab.
     #[test]
     fn deselecting_torrent_does_not_reset_tab() {
         let mut screen = make_screen();
@@ -747,16 +747,16 @@ mod tests {
         )));
         assert_eq!(screen.inspector.active_tab, ActiveTab::Peers);
 
-        // Clicking a different row clears the first selection (plain-click replaces).
+        // Plain-clicking the sole selected torrent now deselects it.
         let _ = screen.update(Message::List(TLMsg::TorrentSelected(1)));
         assert!(
-            screen.list.selected_ids.contains(&1),
-            "clicking the same row re-selects (plain click always replaces)"
+            screen.list.selected_ids.is_empty(),
+            "clicking the sole selected torrent should deselect it"
         );
         assert_eq!(
             screen.inspector.active_tab,
             ActiveTab::Peers,
-            "tab should stay on Peers after re-selecting the same torrent"
+            "tab should stay on Peers after deselection"
         );
     }
 
