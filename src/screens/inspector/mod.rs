@@ -30,7 +30,7 @@ mod state;
 mod update;
 mod view;
 
-pub use state::{InspectorOptionsState, InspectorScreen};
+pub use state::{InspectorBulkOptionsState, InspectorOptionsState, InspectorScreen};
 pub use update::update;
 pub use view::view;
 
@@ -78,6 +78,17 @@ pub enum Message {
     OptionsRatioLimitChanged(String),
     OptionsRatioLimitSubmitted,
     OptionsHonorGlobalToggled(bool),
+    // ── Bulk Options tab messages (multi-select) ──────────────────────────
+    BulkDownloadLimitToggled(bool),
+    BulkDownloadLimitChanged(String),
+    BulkDownloadLimitSubmitted,
+    BulkUploadLimitToggled(bool),
+    BulkUploadLimitChanged(String),
+    BulkUploadLimitSubmitted,
+    BulkRatioModeChanged(u8),
+    BulkRatioLimitChanged(String),
+    BulkRatioLimitSubmitted,
+    BulkHonorGlobalToggled(bool),
 }
 
 #[cfg(test)]

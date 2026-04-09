@@ -117,13 +117,13 @@ fn handle_result(
             {
                 let profile_name = profile.name.clone();
                 let credentials = profile_credentials(state, profile);
-                state.screen = Screen::Main(MainScreen::new_with_label(
+                state.screen = Screen::Main(Box::new(MainScreen::new_with_label(
                     credentials,
                     String::new(),
                     Some(profile_name),
                     Some(profile_id),
                     state.profiles.general.refresh_interval,
-                ));
+                )));
                 return Task::none();
             }
 

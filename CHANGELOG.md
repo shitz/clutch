@@ -7,10 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Multi-select in the torrent list: plain click selects a single torrent, Ctrl/Cmd-click
+  toggles individual rows, Shift-click extends a contiguous range from the anchor row, and
+  Cmd+A / Ctrl+A selects all visible (filtered) torrents.
+- Bulk actions: Pause, Resume, and Delete toolbar buttons now operate on all selected torrents
+  at once. The delete confirmation dialog adapts its title for single vs. multi-torrent
+  deletions.
+- Bulk bandwidth editing in the inspector: when more than one torrent is selected the inspector
+  changes to bulk-edit mode. The speed-limit and seeding-ratio controls apply changes to all
+  selected torrents simultaneously.
+- Right-click on an already-selected torrent keeps the full multi-selection active so context
+  menu actions (Start, Pause, Delete, Set Data Location) apply to all selected torrents.
+- Clicking in the empty space below the last torrent row selects the last torrent, matching
+  standard list-view behaviour.
+
+### Fixed
+
+- ETA column showed a large stale value (e.g. "41776h 6m") for 100% downloaded torrents that
+  are seeding. ETA now correctly shows "—" for seeding torrents.
+- Pressing Enter in the Set Data Location path field now triggers Apply, consistent with other
+  dialogs.
+
 ### Changed
 
-- Refactored some large monolithic modules into smaller submodules for better organization and
-  maintainability.
 - Eliminated per-torrent heap allocation from the render hot path.
 
 ## [0.12.0] - 2026-04-08

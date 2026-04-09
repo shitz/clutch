@@ -87,5 +87,47 @@ pub fn update(state: &mut InspectorScreen, msg: Message) -> Task<Message> {
         Message::OptionsDownloadLimitSubmitted
         | Message::OptionsUploadLimitSubmitted
         | Message::OptionsRatioLimitSubmitted => Task::none(),
+
+        // ── Bulk Options tab (multi-select) ───────────────────────────────────
+        Message::BulkDownloadLimitToggled(v) => {
+            state.bulk_options.download_limited = Some(v);
+            Task::none()
+        }
+        Message::BulkDownloadLimitChanged(v) => {
+            if v.is_empty() || v.chars().all(|c| c.is_ascii_digit()) {
+                state.bulk_options.download_limit_val = v;
+            }
+            Task::none()
+        }
+        Message::BulkUploadLimitToggled(v) => {
+            state.bulk_options.upload_limited = Some(v);
+            Task::none()
+        }
+        Message::BulkUploadLimitChanged(v) => {
+            if v.is_empty() || v.chars().all(|c| c.is_ascii_digit()) {
+                state.bulk_options.upload_limit_val = v;
+            }
+            Task::none()
+        }
+        Message::BulkRatioModeChanged(v) => {
+            state.bulk_options.ratio_mode = Some(v);
+            Task::none()
+        }
+        Message::BulkRatioLimitChanged(v) => {
+            let dot_count = v.chars().filter(|c| *c == '.').count();
+            if v.is_empty() || (v.chars().all(|c| c.is_ascii_digit() || c == '.') && dot_count <= 1)
+            {
+                state.bulk_options.ratio_limit_val = v;
+            }
+            Task::none()
+        }
+        Message::BulkHonorGlobalToggled(v) => {
+            state.bulk_options.honors_session_limits = Some(v);
+            Task::none()
+        }
+        // Bulk submits are intercepted by main_screen.
+        Message::BulkDownloadLimitSubmitted
+        | Message::BulkUploadLimitSubmitted
+        | Message::BulkRatioLimitSubmitted => Task::none(),
     }
 }

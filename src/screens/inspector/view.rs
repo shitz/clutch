@@ -20,14 +20,23 @@ use iced::{Element, Length};
 use crate::format::{format_ago, format_eta, format_size, format_speed};
 use crate::rpc::TorrentData;
 
-use super::{ActiveTab, InspectorOptionsState, InspectorScreen, Message};
+use super::{
+    ActiveTab, InspectorBulkOptionsState, InspectorOptionsState, InspectorScreen, Message,
+};
 
-/// Render the inspector panel for the given torrent.
-pub fn view<'a>(state: &'a InspectorScreen, torrent: &'a TorrentData) -> Element<'a, Message> {
-    // ── Material tab bar ──────────────────────────────────────────────────────
-    // Each tab is a plain button (transparent background). The active tab gets
-    // primary-color text; inactive tabs use muted text. A 2 px underline bar
-    // is stacked beneath the active tab label.
+/// Render the inspector panel.
+///
+/// - `torrent`: the single selected torrent data, or `None` when the selection
+///   is empty or in multi-select bulk-edit mode.
+/// - `selected_count`: the total number of selected torrents (0, 1, or >1).
+pub fn view<'a>(
+    state: &'a InspectorScreen,
+    torrent: Option<&'a TorrentData>,
+    selected_count: usize,
+) -> Element<'a, Message> {
+    // In bulk mode the tab bar is always shown, but only the Options tab is
+    // interactive — clicking any other tab is a no-op (mapped to Options).
+    let is_bulk = selected_count > 1;
 
     let tab_bar = crate::theme::segmented_control(
         &[
@@ -37,8 +46,19 @@ pub fn view<'a>(state: &'a InspectorScreen, torrent: &'a TorrentData) -> Element
             ("Peers", ActiveTab::Peers),
             ("Options", ActiveTab::Options),
         ],
-        state.active_tab,
-        Message::TabSelected,
+        if is_bulk {
+            ActiveTab::Options
+        } else {
+            state.active_tab
+        },
+        move |tab| {
+            if is_bulk && tab != ActiveTab::Options {
+                // Absorb clicks on disabled tabs in bulk mode.
+                Message::TabSelected(ActiveTab::Options)
+            } else {
+                Message::TabSelected(tab)
+            }
+        },
         true,
         true,
     );
@@ -60,12 +80,35 @@ pub fn view<'a>(state: &'a InspectorScreen, torrent: &'a TorrentData) -> Element
     })
     .into();
 
-    let content = match state.active_tab {
-        ActiveTab::General => view_general(torrent),
-        ActiveTab::Files => view_files(state, torrent),
-        ActiveTab::Trackers => view_trackers(torrent),
-        ActiveTab::Peers => view_peers(torrent),
-        ActiveTab::Options => view_options(&state.options),
+    let content: Element<'_, Message> = if is_bulk {
+        let subtitle: Element<'_, Message> = container(
+            text("Editing options for multiple selected torrents")
+                .size(12)
+                .style(|t: &iced::Theme| iced::widget::text::Style {
+                    color: Some(t.palette().text.scale_alpha(0.55)),
+                }),
+        )
+        .padding(iced::Padding {
+            top: 4.0,
+            right: 16.0,
+            bottom: 0.0,
+            left: 16.0,
+        })
+        .into();
+        column![subtitle, view_bulk_options(&state.bulk_options)]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    } else {
+        match state.active_tab {
+            ActiveTab::General => torrent.map(view_general).unwrap_or_else(view_empty),
+            ActiveTab::Files => torrent
+                .map(|t| view_files(state, t))
+                .unwrap_or_else(view_empty),
+            ActiveTab::Trackers => torrent.map(view_trackers).unwrap_or_else(view_empty),
+            ActiveTab::Peers => torrent.map(view_peers).unwrap_or_else(view_empty),
+            ActiveTab::Options => view_options(&state.options),
+        }
     };
 
     container(
@@ -84,6 +127,18 @@ fn tab_content_wrap<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
+}
+
+/// Placeholder panel shown when no torrent tab data is available.
+fn view_empty<'a>() -> Element<'a, Message> {
+    tab_content_wrap(
+        container(text("No torrent selected.").size(14))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .into(),
+    )
 }
 
 // ── General tab ───────────────────────────────────────────────────────────────
@@ -457,6 +512,114 @@ fn view_options(opts: &InspectorOptionsState) -> Element<'_, Message> {
             text_input("ratio", &opts.ratio_limit_val)
                 .on_input(Message::OptionsRatioLimitChanged)
                 .on_submit(Message::OptionsRatioLimitSubmitted)
+                .width(field_w)
+                .padding([10, 14])
+                .style(crate::theme::m3_text_input),
+        ]
+        .align_y(iced::Center);
+        right_items.push(custom_row.into());
+    }
+
+    let right_card = container(iced::widget::column(right_items).spacing(12))
+        .style(crate::theme::m3_card)
+        .padding([12, 16])
+        .width(Length::FillPortion(1));
+
+    container(row![left_card, right_card].spacing(12).padding([12, 16]))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+// ── Bulk Options tab ──────────────────────────────────────────────────────────
+
+fn view_bulk_options(opts: &InspectorBulkOptionsState) -> Element<'_, Message> {
+    use iced::widget::{text_input, toggler};
+
+    let field_w = Length::Fixed(90.0);
+    let tog_gap = || Space::new().width(Length::Fixed(8.0));
+    let sub_label = |s: &'static str| {
+        text(s)
+            .size(12)
+            .style(|t: &iced::Theme| iced::widget::text::Style {
+                color: Some(t.palette().text.scale_alpha(0.45)),
+            })
+    };
+
+    let dl_row = row![
+        toggler(opts.download_limited.unwrap_or(false))
+            .on_toggle(Message::BulkDownloadLimitToggled)
+            .width(Length::Shrink),
+        tog_gap(),
+        text("Limit Download (KB/s)").width(Length::Fill),
+        text_input("", &opts.download_limit_val)
+            .on_input(Message::BulkDownloadLimitChanged)
+            .on_submit(Message::BulkDownloadLimitSubmitted)
+            .width(field_w)
+            .padding([10, 14])
+            .style(crate::theme::m3_text_input),
+    ]
+    .align_y(iced::Center);
+
+    let ul_row = row![
+        toggler(opts.upload_limited.unwrap_or(false))
+            .on_toggle(Message::BulkUploadLimitToggled)
+            .width(Length::Shrink),
+        tog_gap(),
+        text("Limit Upload (KB/s)").width(Length::Fill),
+        text_input("", &opts.upload_limit_val)
+            .on_input(Message::BulkUploadLimitChanged)
+            .on_submit(Message::BulkUploadLimitSubmitted)
+            .width(field_w)
+            .padding([10, 14])
+            .style(crate::theme::m3_text_input),
+    ]
+    .align_y(iced::Center);
+
+    let honor_row = row![
+        toggler(opts.honors_session_limits.unwrap_or(false))
+            .on_toggle(Message::BulkHonorGlobalToggled)
+            .width(Length::Shrink),
+        tog_gap(),
+        text("Honor Global Speed Limits").width(Length::Fill),
+    ]
+    .align_y(iced::Center);
+
+    let left_card = container(
+        scrollable(column![sub_label("Speed Limits"), dl_row, ul_row, honor_row,].spacing(12))
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new().width(6).scroller_width(6),
+            )),
+    )
+    .style(crate::theme::m3_card)
+    .padding([12, 16])
+    .width(Length::FillPortion(1));
+
+    let ratio_mode_val = opts.ratio_mode.unwrap_or(0);
+    let ratio_ctrl = crate::theme::segmented_control(
+        &[("Global", 0_u8), ("Custom", 1_u8), ("Unlimited", 2_u8)],
+        ratio_mode_val,
+        Message::BulkRatioModeChanged,
+        true,
+        true,
+    );
+
+    let mut right_items: Vec<Element<'_, Message>> = vec![
+        text("Seeding Ratio")
+            .size(12)
+            .style(|t: &iced::Theme| iced::widget::text::Style {
+                color: Some(t.palette().text.scale_alpha(0.45)),
+            })
+            .into(),
+        ratio_ctrl,
+    ];
+
+    if ratio_mode_val == 1 {
+        let custom_row = row![
+            text("Custom ratio").width(Length::Fill),
+            text_input("ratio", &opts.ratio_limit_val)
+                .on_input(Message::BulkRatioLimitChanged)
+                .on_submit(Message::BulkRatioLimitSubmitted)
                 .width(field_w)
                 .padding([10, 14])
                 .style(crate::theme::m3_text_input),

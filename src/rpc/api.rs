@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use super::error::RpcError;
 use super::models::{
-    AddPayload, SessionData, SessionSetArgs, SetLocationArgs, TorrentBandwidthArgs, TorrentData,
+    AddPayload, SessionData, SessionSetArgs, TorrentBandwidthArgs, TorrentData,
     TransmissionCredentials,
 };
 use super::transport::{RpcResponse, post_rpc};
@@ -136,18 +136,18 @@ pub async fn session_set(
     check_success(resp, "session-set")
 }
 
-/// Set per-torrent bandwidth limits on the daemon.
+/// Set per-torrent bandwidth limits on the daemon for one or more torrents.
 pub async fn torrent_set_bandwidth(
     url: &str,
     credentials: &TransmissionCredentials,
     session_id: &str,
-    torrent_id: i64,
+    ids: &[i64],
     args: TorrentBandwidthArgs,
 ) -> Result<(), RpcError> {
-    tracing::debug!(%url, %session_id, torrent_id, "Sending torrent-set (bandwidth)");
+    tracing::debug!(%url, %session_id, ?ids, "Sending torrent-set (bandwidth)");
     let mut payload =
         serde_json::to_value(&args).map_err(|e| RpcError::ParseError(e.to_string()))?;
-    payload["ids"] = serde_json::json!([torrent_id]);
+    payload["ids"] = serde_json::json!(ids);
     let resp = post_rpc(
         url,
         credentials,
@@ -205,15 +205,15 @@ pub async fn torrent_get(
     Ok(torrents)
 }
 
-/// Start (resume) a torrent by its Transmission ID.
+/// Start (resume) one or more torrents by their Transmission IDs.
 pub async fn torrent_start(
     url: &str,
     credentials: &TransmissionCredentials,
     session_id: &str,
-    id: i64,
+    ids: &[i64],
 ) -> Result<(), RpcError> {
-    tracing::debug!(%url, %session_id, id, "Sending torrent-start");
-    let args = serde_json::json!({ "ids": [id] });
+    tracing::debug!(%url, %session_id, ?ids, "Sending torrent-start");
+    let args = serde_json::json!({ "ids": ids });
     let resp = post_rpc(
         url,
         credentials,
@@ -226,15 +226,15 @@ pub async fn torrent_start(
     check_success(resp, "torrent-start")
 }
 
-/// Pause (stop) a torrent by its Transmission ID.
+/// Pause (stop) one or more torrents by their Transmission IDs.
 pub async fn torrent_stop(
     url: &str,
     credentials: &TransmissionCredentials,
     session_id: &str,
-    id: i64,
+    ids: &[i64],
 ) -> Result<(), RpcError> {
-    tracing::debug!(%url, %session_id, id, "Sending torrent-stop");
-    let args = serde_json::json!({ "ids": [id] });
+    tracing::debug!(%url, %session_id, ?ids, "Sending torrent-stop");
+    let args = serde_json::json!({ "ids": ids });
     let resp = post_rpc(
         url,
         credentials,
@@ -247,17 +247,17 @@ pub async fn torrent_stop(
     check_success(resp, "torrent-stop")
 }
 
-/// Remove a torrent. When `delete_local_data` is `true` the daemon also
+/// Remove one or more torrents. When `delete_local_data` is `true` the daemon also
 /// deletes all downloaded files from disk.
 pub async fn torrent_remove(
     url: &str,
     credentials: &TransmissionCredentials,
     session_id: &str,
-    id: i64,
+    ids: &[i64],
     delete_local_data: bool,
 ) -> Result<(), RpcError> {
-    tracing::debug!(%url, %session_id, id, delete_local_data, "Sending torrent-remove");
-    let args = serde_json::json!({ "ids": [id], "delete-local-data": delete_local_data });
+    tracing::debug!(%url, %session_id, ?ids, delete_local_data, "Sending torrent-remove");
+    let args = serde_json::json!({ "ids": ids, "delete-local-data": delete_local_data });
     let resp = post_rpc(
         url,
         credentials,
@@ -315,7 +315,7 @@ pub async fn torrent_add(
     }
 }
 
-/// Relocate a torrent's data on the daemon's filesystem.
+/// Relocate one or more torrents' data on the daemon's filesystem.
 ///
 /// When `move_data` is `true`, the daemon physically moves the existing
 /// files to `location`. When `false`, it only updates its internal record
@@ -325,23 +325,18 @@ pub async fn torrent_set_location(
     url: &str,
     credentials: &TransmissionCredentials,
     session_id: &str,
-    torrent_id: i64,
+    ids: &[i64],
     location: &str,
     move_data: bool,
 ) -> Result<(), RpcError> {
-    tracing::debug!(%url, %session_id, torrent_id, %location, move_data, "Sending torrent-set-location");
-    let args = SetLocationArgs {
-        ids: vec![torrent_id],
-        location: location.to_owned(),
-        move_data,
-    };
-    let payload = serde_json::to_value(&args).map_err(|e| RpcError::ParseError(e.to_string()))?;
+    tracing::debug!(%url, %session_id, ?ids, %location, move_data, "Sending torrent-set-location");
+    let args = serde_json::json!({ "ids": ids, "location": location, "move": move_data });
     let resp = post_rpc(
         url,
         credentials,
         session_id,
         "torrent-set-location",
-        Some(payload),
+        Some(args),
         Duration::from_secs(30),
     )
     .await?;
@@ -620,7 +615,7 @@ mod tests {
 
         let creds = test_credentials();
         let url = format!("{}/transmission/rpc", server.uri());
-        assert!(torrent_start(&url, &creds, "sid", 42).await.is_ok());
+        assert!(torrent_start(&url, &creds, "sid", &[42]).await.is_ok());
     }
 
     #[tokio::test]
@@ -634,7 +629,7 @@ mod tests {
 
         let creds = test_credentials();
         let url = format!("{}/transmission/rpc", server.uri());
-        let result = torrent_start(&url, &creds, "old-sid", 1).await;
+        let result = torrent_start(&url, &creds, "old-sid", &[1]).await;
         assert!(matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "new-sid"));
     }
 
@@ -650,7 +645,7 @@ mod tests {
         let creds = test_credentials();
         let url = format!("{}/transmission/rpc", server.uri());
         assert!(matches!(
-            torrent_start(&url, &creds, "sid", 1).await,
+            torrent_start(&url, &creds, "sid", &[1]).await,
             Err(RpcError::AuthError)
         ));
     }
@@ -671,7 +666,7 @@ mod tests {
 
         let creds = test_credentials();
         let url = format!("{}/transmission/rpc", server.uri());
-        assert!(torrent_stop(&url, &creds, "sid", 7).await.is_ok());
+        assert!(torrent_stop(&url, &creds, "sid", &[7]).await.is_ok());
     }
 
     #[tokio::test]
@@ -687,7 +682,7 @@ mod tests {
 
         let creds = test_credentials();
         let url = format!("{}/transmission/rpc", server.uri());
-        let result = torrent_stop(&url, &creds, "old-sid", 7).await;
+        let result = torrent_stop(&url, &creds, "old-sid", &[7]).await;
         assert!(matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "rotated-sid"));
     }
 
@@ -703,7 +698,7 @@ mod tests {
         let creds = test_credentials();
         let url = format!("{}/transmission/rpc", server.uri());
         assert!(matches!(
-            torrent_stop(&url, &creds, "sid", 7).await,
+            torrent_stop(&url, &creds, "sid", &[7]).await,
             Err(RpcError::AuthError)
         ));
     }
@@ -724,7 +719,11 @@ mod tests {
 
         let creds = test_credentials();
         let url = format!("{}/transmission/rpc", server.uri());
-        assert!(torrent_remove(&url, &creds, "sid", 3, false).await.is_ok());
+        assert!(
+            torrent_remove(&url, &creds, "sid", &[3], false)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -741,7 +740,11 @@ mod tests {
 
         let creds = test_credentials();
         let url = format!("{}/transmission/rpc", server.uri());
-        assert!(torrent_remove(&url, &creds, "sid", 3, true).await.is_ok());
+        assert!(
+            torrent_remove(&url, &creds, "sid", &[3], true)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -755,7 +758,7 @@ mod tests {
 
         let creds = test_credentials();
         let url = format!("{}/transmission/rpc", server.uri());
-        let result = torrent_remove(&url, &creds, "old-id", 3, false).await;
+        let result = torrent_remove(&url, &creds, "old-id", &[3], false).await;
         assert!(matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "new-id"));
     }
 
@@ -771,7 +774,7 @@ mod tests {
         let creds = test_credentials();
         let url = format!("{}/transmission/rpc", server.uri());
         assert!(matches!(
-            torrent_remove(&url, &creds, "sid", 3, false).await,
+            torrent_remove(&url, &creds, "sid", &[3], false).await,
             Err(RpcError::AuthError)
         ));
     }
@@ -1121,7 +1124,7 @@ mod tests {
             ..Default::default()
         };
         assert!(
-            torrent_set_bandwidth(&url, &creds, "sid", 42, args)
+            torrent_set_bandwidth(&url, &creds, "sid", &[42], args)
                 .await
                 .is_ok()
         );
@@ -1149,8 +1152,14 @@ mod tests {
 
         let creds = test_credentials();
         let url = format!("{}/transmission/rpc", server.uri());
-        let result =
-            torrent_set_bandwidth(&url, &creds, "old-id", 1, TorrentBandwidthArgs::default()).await;
+        let result = torrent_set_bandwidth(
+            &url,
+            &creds,
+            "old-id",
+            &[1],
+            TorrentBandwidthArgs::default(),
+        )
+        .await;
         assert!(matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "new-id"));
     }
 
@@ -1170,7 +1179,7 @@ mod tests {
 
         let creds = test_credentials();
         let url = format!("{}/transmission/rpc", server.uri());
-        let result = torrent_set_location(&url, &creds, "sid", 42, "/new/path", true).await;
+        let result = torrent_set_location(&url, &creds, "sid", &[42], "/new/path", true).await;
         assert!(result.is_ok());
     }
 
@@ -1188,7 +1197,7 @@ mod tests {
 
         let creds = test_credentials();
         let url = format!("{}/transmission/rpc", server.uri());
-        let result = torrent_set_location(&url, &creds, "sid", 1, "/other/path", false).await;
+        let result = torrent_set_location(&url, &creds, "sid", &[1], "/other/path", false).await;
         assert!(result.is_ok());
     }
 
@@ -1203,7 +1212,7 @@ mod tests {
 
         let creds = test_credentials();
         let url = format!("{}/transmission/rpc", server.uri());
-        let result = torrent_set_location(&url, &creds, "old", 1, "/some/path", true).await;
+        let result = torrent_set_location(&url, &creds, "old", &[1], "/some/path", true).await;
         assert!(matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "rotated"));
     }
 
@@ -1218,7 +1227,7 @@ mod tests {
 
         let creds = test_credentials();
         let url = format!("{}/transmission/rpc", server.uri());
-        let result = torrent_set_location(&url, &creds, "sid", 1, "/path", true).await;
+        let result = torrent_set_location(&url, &creds, "sid", &[1], "/path", true).await;
         assert!(matches!(result, Err(RpcError::AuthError)));
     }
 }

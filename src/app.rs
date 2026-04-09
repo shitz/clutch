@@ -61,7 +61,7 @@ pub enum Screen {
     /// The initial connection form. Shown on startup and after Disconnect.
     Connection(ConnectionScreen),
     /// The main torrent list. Shown after a successful connection.
-    Main(MainScreen),
+    Main(Box<MainScreen>),
     /// The full-screen settings / profiles editor.
     Settings(SettingsScreen),
 }
@@ -148,7 +148,7 @@ pub struct AppState {
     pub active_profile: Option<Uuid>,
     /// Stashed main screen while Settings is open, so we can restore it
     /// without a reconnect/refetch when the user closes Settings.
-    pub stashed_main: Option<MainScreen>,
+    pub stashed_main: Option<Box<MainScreen>>,
     /// Master passphrase held in memory for the session (never written to disk).
     /// Wrapped in `SecretString` so the memory is zeroized on drop.
     pub unlocked_passphrase: Option<SecretString>,

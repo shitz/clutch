@@ -162,6 +162,16 @@ pub fn view(
     let is_filter_empty =
         state.initial_load_done && !state.torrents.is_empty() && display.is_empty();
 
+    // Capture the last visible torrent ID before consuming the iterator so
+    // that clicking in the empty space below the rows can select it.
+    let last_visible_id: Option<i64> = display.last().map(|t| t.id);
+    let display = display_torrents(
+        &state.torrents,
+        state.sort_column,
+        state.sort_dir,
+        &state.filters,
+    );
+
     let rows = display.into_iter().map(|t| {
         let ratio_str = if t.upload_ratio < 0.0 {
             "—".to_owned()
@@ -186,9 +196,15 @@ pub fn view(
             text(format_speed(t.rate_upload))
                 .width(Length::Fixed(W_SPEED_UP))
                 .align_x(Alignment::End),
-            text(format_eta(t.eta))
-                .width(Length::Fixed(W_ETA))
-                .align_x(Alignment::End),
+            // Never show ETA for a completed torrent (percent_done == 1.0);
+            // the daemon may still report a stale positive value after seeding starts.
+            text(if t.percent_done >= 1.0 {
+                "—".to_owned()
+            } else {
+                format_eta(t.eta)
+            })
+            .width(Length::Fixed(W_ETA))
+            .align_x(Alignment::End),
             text(ratio_str)
                 .width(Length::Fixed(W_RATIO))
                 .align_x(Alignment::End),
@@ -214,7 +230,7 @@ pub fn view(
         .padding([10, 0])
         .align_y(iced::Center);
 
-        let is_selected = state.selected_id == Some(t.id);
+        let is_selected = state.selected_ids.contains(&t.id);
         let is_ctx_target = state.context_menu.is_some_and(|(id, _)| id == t.id);
         let row_elem: Element<Message> = if is_selected || is_ctx_target {
             container(row_content)
@@ -275,19 +291,37 @@ pub fn view(
         .center_y(Length::Fill)
         .into()
     } else {
-        scrollable(container(column(rows).spacing(4)).padding(iced::Padding {
-            top: 0.0,
-            bottom: 0.0,
-            left: 0.0,
-            right: SCROLLBAR_WIDTH + 2.0,
-        }))
-        .direction(iced::widget::scrollable::Direction::Vertical(
-            iced::widget::scrollable::Scrollbar::new()
-                .width(SCROLLBAR_WIDTH)
-                .scroller_width(SCROLLBAR_WIDTH)
-                .margin(0),
-        ))
-        .into()
+        // The rows live inside a scrollable (top layer of a stack).  A
+        // full-size mouse_area sits behind it (bottom layer) and catches
+        // clicks that fall into the empty space below the last row — where
+        // the scrollable has no interactive child to capture the event.
+        let row_scroller: Element<Message> =
+            scrollable(container(column(rows).spacing(4)).padding(iced::Padding {
+                top: 0.0,
+                bottom: 0.0,
+                left: 0.0,
+                right: SCROLLBAR_WIDTH + 2.0,
+            }))
+            .direction(iced::widget::scrollable::Direction::Vertical(
+                iced::widget::scrollable::Scrollbar::new()
+                    .width(SCROLLBAR_WIDTH)
+                    .scroller_width(SCROLLBAR_WIDTH)
+                    .margin(0),
+            ))
+            .into();
+
+        let background: Element<Message> = if let Some(last_id) = last_visible_id {
+            mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
+                .on_press(Message::TorrentSelected(last_id))
+                .into()
+        } else {
+            Space::new().width(Length::Fill).height(Length::Fill).into()
+        };
+
+        stack![background, row_scroller]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     };
 
     let main_content: Element<Message> = container(
@@ -312,18 +346,16 @@ pub fn view(
         dialog_state => stack![main_content, view_add_dialog(dialog_state)].into(),
     };
 
-    let after_delete: Element<Message> = if let Some((del_id, del_local)) = state.confirming_delete
-    {
-        let name = state
-            .torrents
-            .iter()
-            .find(|t| t.id == del_id)
-            .map(|t| t.name.as_str())
-            .unwrap_or("this torrent");
-        stack![after_add, opaque(view_delete_dialog(name, del_local))].into()
-    } else {
-        after_add
-    };
+    let after_delete: Element<Message> =
+        if let Some((ref del_ids, del_local)) = state.confirming_delete {
+            stack![
+                after_add,
+                opaque(view_delete_dialog(del_ids, &state.torrents, del_local))
+            ]
+            .into()
+        } else {
+            after_add
+        };
 
     // ── Set Data Location dialog ──────────────────────────────────────────────
     let after_set_location: Element<Message> = if let Some(dlg) = &state.set_location_dialog {

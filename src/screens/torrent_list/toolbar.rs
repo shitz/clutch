@@ -30,12 +30,26 @@ pub(crate) fn view_normal_toolbar(
     state: &TorrentListScreen,
     alt_speed_enabled: bool,
 ) -> Element<'_, Message> {
-    let selected = state
-        .selected_id
-        .and_then(|id| state.torrents.iter().find(|torrent| torrent.id == id));
-    let can_pause = selected.is_some_and(|torrent| matches!(torrent.status, 3..=6));
-    let can_resume = selected.is_some_and(|torrent| torrent.status == 0);
-    let can_delete = state.selected_id.is_some();
+    let selected = state.selected_torrent();
+    // For multi-select: enable Pause if ANY selected torrent is active;
+    // enable Resume if ANY selected torrent is stopped.
+    let (can_pause, can_resume) = if state.selected_ids.len() <= 1 {
+        (
+            selected.is_some_and(|t| matches!(t.status, 3..=6)),
+            selected.is_some_and(|t| t.status == 0),
+        )
+    } else {
+        let selected_torrents: Vec<_> = state
+            .torrents
+            .iter()
+            .filter(|t| state.selected_ids.contains(&t.id))
+            .collect();
+        (
+            selected_torrents.iter().any(|t| matches!(t.status, 3..=6)),
+            selected_torrents.iter().any(|t| t.status == 0),
+        )
+    };
+    let can_delete = !state.selected_ids.is_empty();
 
     let group1: Element<Message> = row![
         tooltip(

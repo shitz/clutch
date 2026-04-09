@@ -31,15 +31,15 @@ pub enum RpcWork {
     TorrentGet(ConnectionParams),
     TorrentStart {
         params: ConnectionParams,
-        id: i64,
+        ids: Vec<i64>,
     },
     TorrentStop {
         params: ConnectionParams,
-        id: i64,
+        ids: Vec<i64>,
     },
     TorrentRemove {
         params: ConnectionParams,
-        id: i64,
+        ids: Vec<i64>,
         delete_local_data: bool,
     },
     TorrentAdd {
@@ -61,12 +61,12 @@ pub enum RpcWork {
     },
     TorrentSetBandwidth {
         params: ConnectionParams,
-        torrent_id: i64,
+        ids: Vec<i64>,
         args: TorrentBandwidthArgs,
     },
     SetLocation {
         params: ConnectionParams,
-        torrent_id: i64,
+        ids: Vec<i64>,
         location: String,
         move_data: bool,
     },
@@ -109,19 +109,19 @@ pub async fn execute_work(work: RpcWork) -> (Option<String>, RpcResult) {
                 other => (None, RpcResult::TorrentsLoaded(other)),
             }
         }
-        RpcWork::TorrentStart { params: p, id } => {
-            match api::torrent_start(&p.url, &p.credentials, &p.session_id, id).await {
+        RpcWork::TorrentStart { params: p, ids } => {
+            match api::torrent_start(&p.url, &p.credentials, &p.session_id, &ids).await {
                 Err(RpcError::SessionRotated(new_id)) => {
-                    let r = api::torrent_start(&p.url, &p.credentials, &new_id, id).await;
+                    let r = api::torrent_start(&p.url, &p.credentials, &new_id, &ids).await;
                     (Some(new_id), RpcResult::ActionDone(r))
                 }
                 other => (None, RpcResult::ActionDone(other)),
             }
         }
-        RpcWork::TorrentStop { params: p, id } => {
-            match api::torrent_stop(&p.url, &p.credentials, &p.session_id, id).await {
+        RpcWork::TorrentStop { params: p, ids } => {
+            match api::torrent_stop(&p.url, &p.credentials, &p.session_id, &ids).await {
                 Err(RpcError::SessionRotated(new_id)) => {
-                    let r = api::torrent_stop(&p.url, &p.credentials, &new_id, id).await;
+                    let r = api::torrent_stop(&p.url, &p.credentials, &new_id, &ids).await;
                     (Some(new_id), RpcResult::ActionDone(r))
                 }
                 other => (None, RpcResult::ActionDone(other)),
@@ -129,16 +129,27 @@ pub async fn execute_work(work: RpcWork) -> (Option<String>, RpcResult) {
         }
         RpcWork::TorrentRemove {
             params: p,
-            id,
+            ids,
             delete_local_data,
         } => {
-            match api::torrent_remove(&p.url, &p.credentials, &p.session_id, id, delete_local_data)
-                .await
+            match api::torrent_remove(
+                &p.url,
+                &p.credentials,
+                &p.session_id,
+                &ids,
+                delete_local_data,
+            )
+            .await
             {
                 Err(RpcError::SessionRotated(new_id)) => {
-                    let r =
-                        api::torrent_remove(&p.url, &p.credentials, &new_id, id, delete_local_data)
-                            .await;
+                    let r = api::torrent_remove(
+                        &p.url,
+                        &p.credentials,
+                        &new_id,
+                        &ids,
+                        delete_local_data,
+                    )
+                    .await;
                     (Some(new_id), RpcResult::ActionDone(r))
                 }
                 other => (None, RpcResult::ActionDone(other)),
@@ -228,27 +239,21 @@ pub async fn execute_work(work: RpcWork) -> (Option<String>, RpcResult) {
         }
         RpcWork::TorrentSetBandwidth {
             params: p,
-            torrent_id,
+            ids,
             args,
         } => {
             match api::torrent_set_bandwidth(
                 &p.url,
                 &p.credentials,
                 &p.session_id,
-                torrent_id,
+                &ids,
                 args.clone(),
             )
             .await
             {
                 Err(RpcError::SessionRotated(new_id)) => {
-                    let r = api::torrent_set_bandwidth(
-                        &p.url,
-                        &p.credentials,
-                        &new_id,
-                        torrent_id,
-                        args,
-                    )
-                    .await;
+                    let r = api::torrent_set_bandwidth(&p.url, &p.credentials, &new_id, &ids, args)
+                        .await;
                     (Some(new_id), RpcResult::BandwidthSet(r))
                 }
                 other => (None, RpcResult::BandwidthSet(other)),
@@ -256,7 +261,7 @@ pub async fn execute_work(work: RpcWork) -> (Option<String>, RpcResult) {
         }
         RpcWork::SetLocation {
             params: p,
-            torrent_id,
+            ids,
             location,
             move_data,
         } => {
@@ -264,7 +269,7 @@ pub async fn execute_work(work: RpcWork) -> (Option<String>, RpcResult) {
                 &p.url,
                 &p.credentials,
                 &p.session_id,
-                torrent_id,
+                &ids,
                 &location,
                 move_data,
             )
@@ -275,7 +280,7 @@ pub async fn execute_work(work: RpcWork) -> (Option<String>, RpcResult) {
                         &p.url,
                         &p.credentials,
                         &new_id,
-                        torrent_id,
+                        &ids,
                         &location,
                         move_data,
                     )

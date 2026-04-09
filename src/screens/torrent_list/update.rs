@@ -44,6 +44,9 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
             state.is_loading = false;
             state.initial_load_done = true;
             state.error = None;
+            // Prune any selected IDs for torrents that are no longer reported
+            // by the daemon (removed, finished and cleaned up, etc.).
+            state.prune_selection_to_visible();
             Task::none()
         }
 
@@ -69,49 +72,101 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
 
         // ── Row selection ─────────────────────────────────────────────────────
         Message::TorrentSelected(id) => {
-            state.selected_id = if state.selected_id == Some(id) {
-                None
+            if state.modifiers.shift() && state.selection_anchor.is_some() {
+                // Shift-click: extend the selection from the anchor to `id`.
+                // Resolve indices against the current visible order at click time.
+                let anchor_id = state.selection_anchor.unwrap();
+                let range_ids: Option<Vec<i64>> = {
+                    let visible = state.visible_torrents();
+                    let anchor_pos = visible.iter().position(|t| t.id == anchor_id);
+                    let target_pos = visible.iter().position(|t| t.id == id);
+                    if let (Some(a), Some(b)) = (anchor_pos, target_pos) {
+                        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+                        Some(visible[lo..=hi].iter().map(|t| t.id).collect())
+                    } else {
+                        None
+                    }
+                };
+                if let Some(ids) = range_ids {
+                    for rid in ids {
+                        state.selected_ids.insert(rid);
+                    }
+                } else {
+                    // Anchor not in current visible set — fall back to plain-click.
+                    state.selected_ids.clear();
+                    state.selected_ids.insert(id);
+                    state.selection_anchor = Some(id);
+                }
+            } else if state.modifiers.command() || state.modifiers.control() {
+                // Ctrl/Cmd-click: toggle membership, update anchor.
+                if state.selected_ids.contains(&id) {
+                    state.selected_ids.remove(&id);
+                } else {
+                    state.selected_ids.insert(id);
+                }
+                state.selection_anchor = Some(id);
             } else {
-                Some(id)
-            };
+                // Plain click: replace selection, set anchor.
+                state.selected_ids.clear();
+                state.selected_ids.insert(id);
+                state.selection_anchor = Some(id);
+            }
+            Task::none()
+        }
+
+        Message::ModifiersChanged(m) => {
+            state.modifiers = m;
+            Task::none()
+        }
+
+        Message::KeyboardSelectAll => {
+            // Select every currently visible (filtered + sorted) torrent.
+            let visible_ids: Vec<i64> = state.visible_torrents().iter().map(|t| t.id).collect();
+            for id in &visible_ids {
+                state.selected_ids.insert(*id);
+            }
+            state.selection_anchor = visible_ids.first().copied();
             Task::none()
         }
 
         // ── Toolbar actions ───────────────────────────────────────────────────
         Message::PauseClicked => {
-            if let Some(id) = state.selected_id {
-                tracing::info!(id, "Pausing torrent");
+            let ids: Vec<i64> = state.selected_ids.iter().copied().collect();
+            if !ids.is_empty() {
+                tracing::info!(?ids, "Pausing torrents");
                 state.is_loading = true;
                 state.enqueue(RpcWork::TorrentStop {
                     params: state.params.clone(),
-                    id,
+                    ids,
                 });
             }
             Task::none()
         }
 
         Message::ResumeClicked => {
-            if let Some(id) = state.selected_id {
-                tracing::info!(id, "Resuming torrent");
+            let ids: Vec<i64> = state.selected_ids.iter().copied().collect();
+            if !ids.is_empty() {
+                tracing::info!(?ids, "Resuming torrents");
                 state.is_loading = true;
                 state.enqueue(RpcWork::TorrentStart {
                     params: state.params.clone(),
-                    id,
+                    ids,
                 });
             }
             Task::none()
         }
 
         Message::DeleteClicked => {
-            if let Some(id) = state.selected_id {
-                state.confirming_delete = Some((id, false));
+            if !state.selected_ids.is_empty() {
+                let ids: Vec<i64> = state.selected_ids.iter().copied().collect();
+                state.confirming_delete = Some((ids, false));
             }
             Task::none()
         }
 
         Message::DeleteLocalDataToggled(val) => {
-            if let Some((id, _)) = state.confirming_delete {
-                state.confirming_delete = Some((id, val));
+            if let Some((_, del)) = &mut state.confirming_delete {
+                *del = val;
             }
             Task::none()
         }
@@ -122,12 +177,12 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
         }
 
         Message::DeleteConfirmed => {
-            if let Some((id, delete_local_data)) = state.confirming_delete.take() {
-                tracing::info!(id, delete_local_data, "Deleting torrent");
+            if let Some((ids, delete_local_data)) = state.confirming_delete.take() {
+                tracing::info!(?ids, delete_local_data, "Deleting torrents");
                 state.is_loading = true;
                 state.enqueue(RpcWork::TorrentRemove {
                     params: state.params.clone(),
-                    id,
+                    ids,
                     delete_local_data,
                 });
             }
@@ -379,6 +434,9 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
             } else {
                 state.filters.insert(filter);
             }
+            // Selection always reflects only what is visible; prune any IDs
+            // that the new filter hides.
+            state.prune_selection_to_visible();
             Task::none()
         }
 
@@ -388,6 +446,7 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
             } else {
                 state.filters = StatusFilter::all().into_iter().collect();
             }
+            state.prune_selection_to_visible();
             Task::none()
         }
 
@@ -405,6 +464,14 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
 
         // ── Context menu ──────────────────────────────────────────────────────
         Message::TorrentRightClicked(id) => {
+            // If the right-clicked torrent is not already selected, replace the
+            // selection with only that torrent. If it is already selected, keep
+            // the existing multi-selection so the context menu operates on all.
+            if !state.selected_ids.contains(&id) {
+                state.selected_ids.clear();
+                state.selected_ids.insert(id);
+                state.selection_anchor = Some(id);
+            }
             state.context_menu = Some((id, state.last_cursor_position));
             Task::none()
         }
@@ -414,47 +481,59 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
             Task::none()
         }
 
-        Message::ContextMenuStart(id) => {
+        Message::ContextMenuStart => {
             state.context_menu = None;
-            tracing::info!(id, "Resuming torrent via context menu");
-            state.is_loading = true;
-            state.enqueue(RpcWork::TorrentStart {
-                params: state.params.clone(),
-                id,
-            });
+            let ids: Vec<i64> = state.selected_ids.iter().copied().collect();
+            if !ids.is_empty() {
+                tracing::info!(?ids, "Resuming torrents via context menu");
+                state.is_loading = true;
+                state.enqueue(RpcWork::TorrentStart {
+                    params: state.params.clone(),
+                    ids,
+                });
+            }
             Task::none()
         }
 
-        Message::ContextMenuPause(id) => {
+        Message::ContextMenuPause => {
             state.context_menu = None;
-            tracing::info!(id, "Pausing torrent via context menu");
-            state.is_loading = true;
-            state.enqueue(RpcWork::TorrentStop {
-                params: state.params.clone(),
-                id,
-            });
+            let ids: Vec<i64> = state.selected_ids.iter().copied().collect();
+            if !ids.is_empty() {
+                tracing::info!(?ids, "Pausing torrents via context menu");
+                state.is_loading = true;
+                state.enqueue(RpcWork::TorrentStop {
+                    params: state.params.clone(),
+                    ids,
+                });
+            }
             Task::none()
         }
 
-        Message::ContextMenuDelete(id) => {
+        Message::ContextMenuDelete => {
             state.context_menu = None;
-            state.confirming_delete = Some((id, false));
+            if !state.selected_ids.is_empty() {
+                let ids: Vec<i64> = state.selected_ids.iter().copied().collect();
+                state.confirming_delete = Some((ids, false));
+            }
             Task::none()
         }
 
-        Message::OpenSetLocation(id) => {
+        Message::OpenSetLocation => {
             state.context_menu = None;
-            let dir = state
-                .torrents
-                .iter()
-                .find(|t| t.id == id)
+            let ids: Vec<i64> = state.selected_ids.iter().copied().collect();
+            // Pre-fill path from the first selected torrent's downloadDir.
+            let dir = ids
+                .first()
+                .and_then(|&id| state.torrents.iter().find(|t| t.id == id))
                 .map(|t| t.download_dir.clone())
                 .unwrap_or_default();
-            state.set_location_dialog = Some(SetLocationDialog {
-                torrent_id: id,
-                path: dir,
-                move_data: true,
-            });
+            if !ids.is_empty() {
+                state.set_location_dialog = Some(SetLocationDialog {
+                    ids,
+                    path: dir,
+                    move_data: true,
+                });
+            }
             Task::none()
         }
 
@@ -483,14 +562,14 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
                 && !dlg.path.trim().is_empty()
             {
                 tracing::info!(
-                    torrent_id = dlg.torrent_id,
+                    ids = ?dlg.ids,
                     path = %dlg.path,
                     move_data = dlg.move_data,
                     "Setting torrent data location"
                 );
                 state.enqueue(RpcWork::SetLocation {
                     params: state.params.clone(),
-                    torrent_id: dlg.torrent_id,
+                    ids: dlg.ids,
                     location: dlg.path,
                     move_data: dlg.move_data,
                 });

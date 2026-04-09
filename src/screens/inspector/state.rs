@@ -49,6 +49,28 @@ impl InspectorOptionsState {
     }
 }
 
+// ── InspectorBulkOptionsState ─────────────────────────────────────────────────
+
+/// Draft state for bulk-editing bandwidth options across multiple selected torrents.
+///
+/// Every field is `Option` so the view can distinguish "not yet touched by the
+/// user" (`None`) from "explicitly set to false/0" (`Some(false)` / `Some(0)`).
+/// Only `Some` fields are sent to the daemon.
+#[derive(Debug, Default, Clone)]
+pub struct InspectorBulkOptionsState {
+    /// Whether a custom download limit should be applied.
+    pub download_limited: Option<bool>,
+    pub download_limit_val: String,
+    /// Whether a custom upload limit should be applied.
+    pub upload_limited: Option<bool>,
+    pub upload_limit_val: String,
+    /// Ratio mode override: `None` = untouched, `Some(0/1/2)` = Global/Custom/Unlimited.
+    pub ratio_mode: Option<u8>,
+    pub ratio_limit_val: String,
+    /// Honor-session-limits override.
+    pub honors_session_limits: Option<bool>,
+}
+
 // ── InspectorScreen ───────────────────────────────────────────────────────────
 
 /// State for the inspector detail panel.
@@ -59,8 +81,11 @@ pub struct InspectorScreen {
     /// Entries are inserted when the user toggles a checkbox and removed
     /// when the corresponding `torrent-set` RPC completes (or fails).
     pub pending_wanted: HashMap<usize, bool>,
-    /// Draft state for the Options tab.
+    /// Draft state for the Options tab (single-torrent mode).
     pub options: InspectorOptionsState,
+    /// Draft state for bulk-edit Options (multi-select mode).
+    /// Reset to `Default` whenever the selection transitions to/from bulk.
+    pub bulk_options: InspectorBulkOptionsState,
 }
 
 impl InspectorScreen {

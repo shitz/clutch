@@ -72,30 +72,40 @@ pub fn view_context_menu_overlay(state: &TorrentListScreen) -> Option<Element<'_
         .torrents
         .iter()
         .find(|torrent| torrent.id == torrent_id);
-    let can_start = torrent_opt.is_some_and(|torrent| !matches!(torrent.status, 3..=6));
-    let can_pause = torrent_opt.is_some_and(|torrent| matches!(torrent.status, 3..=6));
+    // Enable Start/Pause based on aggregate status across all selected torrents.
+    let selected_torrents: Vec<_> = state
+        .torrents
+        .iter()
+        .filter(|t| state.selected_ids.contains(&t.id))
+        .collect();
+    let can_start = if selected_torrents.is_empty() {
+        torrent_opt.is_some_and(|t| !matches!(t.status, 3..=6))
+    } else {
+        selected_torrents.iter().any(|t| !matches!(t.status, 3..=6))
+    };
+    let can_pause = if selected_torrents.is_empty() {
+        torrent_opt.is_some_and(|t| matches!(t.status, 3..=6))
+    } else {
+        selected_torrents.iter().any(|t| matches!(t.status, 3..=6))
+    };
 
     let menu_card = container(
         column![
             menu_item(
                 ICON_PLAY,
                 "Start",
-                can_start.then_some(Message::ContextMenuStart(torrent_id))
+                can_start.then_some(Message::ContextMenuStart)
             ),
             menu_item(
                 ICON_PAUSE,
                 "Pause",
-                can_pause.then_some(Message::ContextMenuPause(torrent_id))
+                can_pause.then_some(Message::ContextMenuPause)
             ),
-            menu_item(
-                ICON_DELETE,
-                "Delete",
-                Some(Message::ContextMenuDelete(torrent_id))
-            ),
+            menu_item(ICON_DELETE, "Delete", Some(Message::ContextMenuDelete)),
             menu_item(
                 ICON_FOLDER,
                 "Set Data Location",
-                Some(Message::OpenSetLocation(torrent_id))
+                Some(Message::OpenSetLocation)
             ),
         ]
         .spacing(0),
@@ -129,11 +139,26 @@ pub fn view_context_menu_overlay(state: &TorrentListScreen) -> Option<Element<'_
     Some(stack![click_away, positioned].into())
 }
 
-/// Render the delete-confirmation dialog for the currently selected torrent.
-pub(crate) fn view_delete_dialog(name: &str, del_local: bool) -> Element<'_, Message> {
+/// Render the delete-confirmation dialog for one or more torrents.
+pub(crate) fn view_delete_dialog(
+    ids: &[i64],
+    torrents: &[crate::rpc::TorrentData],
+    del_local: bool,
+) -> Element<'static, Message> {
+    let title = if ids.len() == 1 {
+        let name = torrents
+            .iter()
+            .find(|t| Some(t.id) == ids.first().copied())
+            .map(|t| t.name.as_str())
+            .unwrap_or("this torrent");
+        format!("Delete \"{}\"?", name)
+    } else {
+        format!("Delete {} torrents?", ids.len())
+    };
+
     let card = container(
         column![
-            text(format!("Delete \"{}\"?", name)).size(18),
+            text(title).size(18),
             text("This cannot be undone.").size(13),
             checkbox(del_local)
                 .label("Also delete local data")
@@ -177,6 +202,7 @@ pub(crate) fn view_set_location_dialog(dlg: &SetLocationDialog) -> Element<'_, M
             text("Destination path on the daemon's filesystem"),
             text_input("/path/to/data", &dlg.path)
                 .on_input(Message::SetLocationPathChanged)
+                .on_submit(Message::SetLocationApply)
                 .padding([12, 16])
                 .style(crate::theme::m3_text_input),
             checkbox(dlg.move_data)

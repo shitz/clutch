@@ -102,13 +102,13 @@ pub(super) fn handle_connection_message(state: &mut AppState, message: Message) 
         });
         let profiles_snapshot = state.profiles.clone();
 
-        state.screen = Screen::Main(MainScreen::new_with_label(
+        state.screen = Screen::Main(Box::new(MainScreen::new_with_label(
             success.creds,
             success.session_id,
             profile_name,
             Some(profile_id),
             state.profiles.general.refresh_interval,
-        ));
+        )));
         tracing::info!(profile_id = %profile_id, "Connected via saved profile");
 
         let save_task = Task::perform(async move { profiles_snapshot.save().await }, |_| {
@@ -123,13 +123,13 @@ pub(super) fn handle_connection_message(state: &mut AppState, message: Message) 
     }
 
     state.active_profile = None;
-    state.screen = Screen::Main(MainScreen::new_with_label(
+    state.screen = Screen::Main(Box::new(MainScreen::new_with_label(
         success.creds,
         success.session_id,
         None,
         None,
         state.profiles.general.refresh_interval,
-    ));
+    )));
     tracing::info!("Connected via quick connect (ephemeral)");
     task.map(Message::Connection)
 }
@@ -274,13 +274,13 @@ fn apply_auto_connect_result(
                 &session_id,
                 profile,
             );
-            state.screen = Screen::Main(MainScreen::new_with_label(
+            state.screen = Screen::Main(Box::new(MainScreen::new_with_label(
                 credentials,
                 session_id,
                 Some(profile_name),
                 Some(profile_id),
                 state.profiles.general.refresh_interval,
-            ));
+            )));
 
             if let Some(push_task) = push_task {
                 push_task

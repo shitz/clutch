@@ -37,6 +37,7 @@ pub mod worker;
 
 use std::collections::HashSet;
 
+use iced::keyboard::Modifiers;
 use tokio::sync::mpsc;
 
 use crate::rpc::{ConnectionParams, RpcWork, SessionData, TorrentData, TransmissionCredentials};
@@ -57,7 +58,7 @@ pub use worker::rpc_worker_stream;
 /// State for the "Set Data Location" modal dialog.
 #[derive(Debug, Clone)]
 pub struct SetLocationDialog {
-    pub torrent_id: i64,
+    pub ids: Vec<i64>,
     /// Absolute path to set (prefilled from the torrent's `downloadDir`).
     pub path: String,
     /// When `true`, the daemon physically moves files to the new location;
@@ -154,13 +155,13 @@ pub enum Message {
     /// Dismiss the open context menu (click-away or any action).
     DismissContextMenu,
     /// Start action chosen from the context menu.
-    ContextMenuStart(i64),
+    ContextMenuStart,
     /// Pause action chosen from the context menu.
-    ContextMenuPause(i64),
+    ContextMenuPause,
     /// Delete action chosen from the context menu.
-    ContextMenuDelete(i64),
+    ContextMenuDelete,
     /// "Set Data Location" chosen from the context menu — opens the modal dialog.
-    OpenSetLocation(i64),
+    OpenSetLocation,
     // Set-location dialog
     SetLocationPathChanged(String),
     SetLocationMoveToggled,
@@ -182,6 +183,10 @@ pub enum Message {
     },
     /// Enter key pressed while the add-torrent dialog is open.
     DialogEnterPressed,
+    /// Keyboard modifier keys changed (Shift, Ctrl, Cmd, Alt).
+    ModifiersChanged(Modifiers),
+    /// Cmd+A / Ctrl+A — select all visible (filtered) torrents.
+    KeyboardSelectAll,
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -196,8 +201,14 @@ pub struct TorrentListScreen {
     pub initial_load_done: bool,
     pub sender: Option<mpsc::Sender<RpcWork>>,
     pub error: Option<String>,
-    pub selected_id: Option<i64>,
-    pub confirming_delete: Option<(i64, bool)>,
+    /// Set of IDs currently selected in the list.
+    pub selected_ids: HashSet<i64>,
+    /// The ID of the last row targeted by a plain or Ctrl/Cmd-click.
+    /// Used as the fixed end of a Shift-click range.
+    pub selection_anchor: Option<i64>,
+    /// Current global keyboard modifier state, kept in sync via `modifiers_subscription()`.
+    pub modifiers: Modifiers,
+    pub confirming_delete: Option<(Vec<i64>, bool)>,
     pub add_dialog: AddDialogState,
     pub sort_column: Option<SortColumn>,
     pub sort_dir: SortDir,
@@ -223,7 +234,9 @@ impl TorrentListScreen {
             is_loading: false,
             initial_load_done: false,
             error: None,
-            selected_id: None,
+            selected_ids: HashSet::new(),
+            selection_anchor: None,
+            modifiers: Modifiers::default(),
             confirming_delete: None,
             add_dialog: AddDialogState::Hidden,
             sender: None,
@@ -239,10 +252,45 @@ impl TorrentListScreen {
     }
 
     /// Return the currently selected torrent, if any.
+    /// Returns `Some` only when exactly one torrent is selected.
     #[must_use]
     pub fn selected_torrent(&self) -> Option<&TorrentData> {
-        let id = self.selected_id?;
+        if self.selected_ids.len() != 1 {
+            return None;
+        }
+        let id = self.selected_ids.iter().next().copied()?;
         self.torrents.iter().find(|t| t.id == id)
+    }
+
+    /// Return the visible (filtered + sorted) torrents in display order.
+    ///
+    /// Used by click-selection handlers to resolve index-based ranges (Shift-click)
+    /// without coupling update logic to the view layer.
+    #[must_use]
+    pub fn visible_torrents(&self) -> Vec<&TorrentData> {
+        filters::display_torrents(
+            &self.torrents,
+            self.sort_column,
+            self.sort_dir,
+            &self.filters,
+        )
+    }
+
+    /// Remove from `selected_ids` any torrent IDs that are not currently
+    /// visible (i.e. filtered out or no longer present on the daemon).
+    ///
+    /// Also clears `selection_anchor` if the anchor torrent is no longer
+    /// visible, so that subsequent Shift-click ranges are calculated from a
+    /// valid starting point.
+    pub(crate) fn prune_selection_to_visible(&mut self) {
+        let visible_ids: std::collections::HashSet<i64> =
+            self.visible_torrents().into_iter().map(|t| t.id).collect();
+        self.selected_ids.retain(|id| visible_ids.contains(id));
+        if let Some(anchor) = self.selection_anchor
+            && !visible_ids.contains(&anchor)
+        {
+            self.selection_anchor = None;
+        }
     }
 
     pub(crate) fn enqueue(&self, work: RpcWork) {
@@ -304,6 +352,26 @@ impl TorrentListScreen {
                 Some(Message::WindowResized { width, height })
             }
             _ => None,
+        })
+    }
+
+    /// Subscription that tracks global keyboard modifier state (Shift, Ctrl, Cmd, Alt)
+    /// and Cmd+A / Ctrl+A select-all.
+    pub fn modifiers_subscription() -> Subscription<Message> {
+        iced::keyboard::listen().filter_map(|event| {
+            use iced::keyboard::{Event, Key, Modifiers};
+            match event {
+                Event::ModifiersChanged(m) => Some(Message::ModifiersChanged(m)),
+                Event::KeyPressed {
+                    key: Key::Character(c),
+                    modifiers,
+                    ..
+                } if (modifiers.command() || modifiers.control()) && c.as_str() == "a" => {
+                    let _ = Modifiers::CTRL; // suppress unused-warning if any
+                    Some(Message::KeyboardSelectAll)
+                }
+                _ => None,
+            }
         })
     }
 }
@@ -390,28 +458,25 @@ mod tests {
         assert_eq!(screen.params.session_id, "new-id-xyz");
     }
 
-    /// `TorrentSelected` toggles `selected_id` correctly.
+    /// `TorrentSelected` (plain click) selects the torrent correctly.
     #[test]
     fn torrent_selected_toggles() {
         let mut screen = make_screen();
         screen.torrents = vec![make_torrent(1, "A"), make_torrent(2, "B")];
 
         let _ = update(&mut screen, Message::TorrentSelected(1));
-        assert_eq!(screen.selected_id, Some(1));
+        assert!(screen.selected_ids.contains(&1));
 
         let _ = update(&mut screen, Message::TorrentSelected(2));
-        assert_eq!(screen.selected_id, Some(2));
-
-        let _ = update(&mut screen, Message::TorrentSelected(2));
-        assert_eq!(screen.selected_id, None);
+        assert!(screen.selected_ids.contains(&2));
     }
 
-    /// `selected_torrent()` returns the matching torrent when selected.
+    /// `selected_torrent()` returns the matching torrent when exactly one is selected.
     #[test]
     fn selected_torrent_returns_correct_entry() {
         let mut screen = make_screen();
         screen.torrents = vec![make_torrent(1, "Alpha"), make_torrent(2, "Beta")];
-        screen.selected_id = Some(2);
+        screen.selected_ids = [2].into_iter().collect();
         let t = screen.selected_torrent().expect("should have a selection");
         assert_eq!(t.id, 2);
         assert_eq!(t.name, "Beta");
@@ -429,9 +494,9 @@ mod tests {
     fn delete_clicked_sets_confirming() {
         let mut screen = make_screen();
         screen.torrents = vec![make_torrent(5, "Arch")];
-        screen.selected_id = Some(5);
+        screen.selected_ids = [5].into_iter().collect();
         let _ = update(&mut screen, Message::DeleteClicked);
-        assert_eq!(screen.confirming_delete, Some((5, false)));
+        assert_eq!(screen.confirming_delete, Some((vec![5], false)));
     }
 
     /// `DeleteClicked` is a no-op when nothing is selected.
@@ -446,7 +511,7 @@ mod tests {
     #[test]
     fn delete_cancelled_clears_confirming() {
         let mut screen = make_screen();
-        screen.confirming_delete = Some((3, true));
+        screen.confirming_delete = Some((vec![3], true));
         let _ = update(&mut screen, Message::DeleteCancelled);
         assert_eq!(screen.confirming_delete, None);
     }
@@ -455,7 +520,7 @@ mod tests {
     #[test]
     fn delete_confirmed_clears_confirming_and_loads() {
         let mut screen = make_screen();
-        screen.confirming_delete = Some((7, true));
+        screen.confirming_delete = Some((vec![7], true));
         let _ = update(&mut screen, Message::DeleteConfirmed);
         assert_eq!(screen.confirming_delete, None);
         assert!(screen.is_loading);
@@ -473,11 +538,11 @@ mod tests {
     #[test]
     fn delete_local_data_toggled_updates_state() {
         let mut screen = make_screen();
-        screen.confirming_delete = Some((9, false));
+        screen.confirming_delete = Some((vec![9], false));
         let _ = update(&mut screen, Message::DeleteLocalDataToggled(true));
-        assert_eq!(screen.confirming_delete, Some((9, true)));
+        assert_eq!(screen.confirming_delete, Some((vec![9], true)));
         let _ = update(&mut screen, Message::DeleteLocalDataToggled(false));
-        assert_eq!(screen.confirming_delete, Some((9, false)));
+        assert_eq!(screen.confirming_delete, Some((vec![9], false)));
     }
 
     /// `ActionCompleted(Ok)` keeps loading active and triggers a refresh.
@@ -507,7 +572,8 @@ mod tests {
     fn tick_ignored_while_action_in_flight() {
         let mut screen = make_screen();
         screen.is_loading = true;
-        screen.selected_id = Some(1);
+        // Any non-empty selection keeps the tick guarded.
+        screen.selected_ids = [1].into_iter().collect();
         let _ = update(&mut screen, Message::Tick);
         assert!(screen.is_loading);
     }
@@ -1029,10 +1095,15 @@ mod tests {
     #[test]
     fn context_menu_delete_dismisses_and_confirms() {
         let mut screen = make_screen();
+        screen.torrents = vec![make_torrent(7, "Arch")];
+        screen.selected_ids = [7].into_iter().collect();
         screen.context_menu = Some((7, iced::Point::ORIGIN));
-        let _ = update(&mut screen, Message::ContextMenuDelete(7));
+        let _ = update(&mut screen, Message::ContextMenuDelete);
         assert!(screen.context_menu.is_none());
-        assert_eq!(screen.confirming_delete, Some((7, false)));
+        assert!(matches!(
+            screen.confirming_delete,
+            Some((ref ids, false)) if ids.contains(&7)
+        ));
     }
 
     /// OpenSetLocation dismisses the menu and opens the dialog prefilled with downloadDir.
@@ -1046,11 +1117,12 @@ mod tests {
             download_dir: "/data/torrents".to_owned(),
             ..Default::default()
         }];
+        screen.selected_ids = [9].into_iter().collect();
         screen.context_menu = Some((9, iced::Point::ORIGIN));
-        let _ = update(&mut screen, Message::OpenSetLocation(9));
+        let _ = update(&mut screen, Message::OpenSetLocation);
         assert!(screen.context_menu.is_none());
         let dlg = screen.set_location_dialog.expect("dialog should be open");
-        assert_eq!(dlg.torrent_id, 9);
+        assert!(dlg.ids.contains(&9));
         assert_eq!(dlg.path, "/data/torrents");
         assert!(dlg.move_data, "move_data defaults to true");
     }
@@ -1059,8 +1131,9 @@ mod tests {
     #[test]
     fn context_menu_start_dismisses_and_enqueues() {
         let mut screen = make_screen();
+        screen.selected_ids = [4].into_iter().collect();
         screen.context_menu = Some((4, iced::Point::ORIGIN));
-        let _ = update(&mut screen, Message::ContextMenuStart(4));
+        let _ = update(&mut screen, Message::ContextMenuStart);
         assert!(screen.context_menu.is_none());
         assert!(screen.is_loading);
     }
@@ -1069,8 +1142,9 @@ mod tests {
     #[test]
     fn context_menu_pause_dismisses_and_enqueues() {
         let mut screen = make_screen();
+        screen.selected_ids = [5].into_iter().collect();
         screen.context_menu = Some((5, iced::Point::ORIGIN));
-        let _ = update(&mut screen, Message::ContextMenuPause(5));
+        let _ = update(&mut screen, Message::ContextMenuPause);
         assert!(screen.context_menu.is_none());
         assert!(screen.is_loading);
     }
@@ -1082,7 +1156,7 @@ mod tests {
     fn set_location_path_changed_updates_path() {
         let mut screen = make_screen();
         screen.set_location_dialog = Some(SetLocationDialog {
-            torrent_id: 1,
+            ids: vec![1],
             path: "/old".to_owned(),
             move_data: true,
         });
@@ -1099,7 +1173,7 @@ mod tests {
     fn set_location_move_toggled_flips_flag() {
         let mut screen = make_screen();
         screen.set_location_dialog = Some(SetLocationDialog {
-            torrent_id: 1,
+            ids: vec![1],
             path: String::new(),
             move_data: true,
         });
@@ -1114,7 +1188,7 @@ mod tests {
     fn set_location_cancel_closes_dialog() {
         let mut screen = make_screen();
         screen.set_location_dialog = Some(SetLocationDialog {
-            torrent_id: 2,
+            ids: vec![2],
             path: "/some/path".to_owned(),
             move_data: false,
         });
@@ -1128,7 +1202,7 @@ mod tests {
     fn set_location_apply_closes_dialog_with_valid_path() {
         let mut screen = make_screen();
         screen.set_location_dialog = Some(SetLocationDialog {
-            torrent_id: 3,
+            ids: vec![3],
             path: "/valid/path".to_owned(),
             move_data: true,
         });
@@ -1141,7 +1215,7 @@ mod tests {
     fn set_location_apply_noop_with_empty_path() {
         let mut screen = make_screen();
         screen.set_location_dialog = Some(SetLocationDialog {
-            torrent_id: 3,
+            ids: vec![3],
             path: "  ".to_owned(),
             move_data: true,
         });
@@ -1149,5 +1223,270 @@ mod tests {
         // Dialog is cleared but no RPC is enqueued (sender is None so no panic).
         assert!(screen.set_location_dialog.is_none());
         assert!(!screen.is_loading);
+    }
+
+    // ── Multi-select behaviour ────────────────────────────────────────────────
+
+    /// Cmd/Ctrl-click adds a second torrent to the selection without clearing
+    /// the first, and `selected_torrent()` returns `None` for multi-select.
+    #[test]
+    fn cmd_click_creates_multi_select_and_selected_torrent_returns_none() {
+        let mut screen = make_screen();
+        screen.torrents = vec![make_torrent(1, "A"), make_torrent(2, "B")];
+
+        // Plain click to select first.
+        let _ = update(&mut screen, Message::TorrentSelected(1));
+        assert_eq!(screen.selected_ids.len(), 1);
+        assert!(screen.selected_torrent().is_some());
+
+        // Cmd-click to add the second.
+        screen.modifiers = Modifiers::COMMAND;
+        let _ = update(&mut screen, Message::TorrentSelected(2));
+        assert!(screen.selected_ids.contains(&1));
+        assert!(screen.selected_ids.contains(&2));
+        assert_eq!(screen.selected_ids.len(), 2);
+
+        // With 2 IDs selected, `selected_torrent()` must return None.
+        assert!(
+            screen.selected_torrent().is_none(),
+            "selected_torrent() must be None for multi-select"
+        );
+    }
+
+    /// Cmd/Ctrl-click on an already-selected torrent removes it (toggle off).
+    #[test]
+    fn cmd_click_deselects_already_selected_torrent() {
+        let mut screen = make_screen();
+        screen.torrents = vec![make_torrent(1, "A"), make_torrent(2, "B")];
+        screen.selected_ids = [1, 2].into_iter().collect();
+        screen.selection_anchor = Some(1);
+
+        screen.modifiers = Modifiers::COMMAND;
+        let _ = update(&mut screen, Message::TorrentSelected(2));
+        assert_eq!(screen.selected_ids.len(), 1);
+        assert!(!screen.selected_ids.contains(&2));
+    }
+
+    // ── Filter + selection interaction ────────────────────────────────────────
+
+    /// Toggling a filter that hides a selected torrent must remove that torrent
+    /// from `selected_ids`.
+    #[test]
+    fn filter_toggle_prunes_hidden_torrent_from_selection() {
+        let mut screen = make_screen();
+        // Torrent 1 is Seeding (status=6); torrent 2 is Paused (status=0).
+        screen.torrents = vec![
+            TorrentData {
+                id: 1,
+                name: "Seeder".to_owned(),
+                status: 6,
+                ..Default::default()
+            },
+            TorrentData {
+                id: 2,
+                name: "Paused".to_owned(),
+                status: 0,
+                ..Default::default()
+            },
+        ];
+        screen.selected_ids = [1, 2].into_iter().collect();
+        screen.selection_anchor = Some(2);
+
+        // make_screen() starts with ALL filters active.
+        // Toggle the Paused filter OFF — torrent 2 (Paused) becomes hidden.
+        let _ = update(&mut screen, Message::FilterToggled(StatusFilter::Paused));
+
+        assert!(
+            screen.selected_ids.contains(&1),
+            "visible torrent stays selected"
+        );
+        assert!(
+            !screen.selected_ids.contains(&2),
+            "hidden torrent must be pruned from selection"
+        );
+        assert_eq!(
+            screen.selection_anchor, None,
+            "anchor must be cleared when the anchor torrent is filtered out"
+        );
+    }
+
+    /// FilterAllClicked (select all filters / clear all) must also prune selection
+    /// to only the newly visible set.
+    #[test]
+    fn filter_all_clicked_prunes_selection_to_visible() {
+        let mut screen = make_screen();
+        screen.torrents = vec![
+            TorrentData {
+                id: 1,
+                name: "Seeder".to_owned(),
+                status: 6,
+                ..Default::default()
+            },
+            TorrentData {
+                id: 2,
+                name: "Downloader".to_owned(),
+                status: 4,
+                ..Default::default()
+            },
+        ];
+        // Narrow active filters to only Seeding — torrent 2 (Downloading) is hidden.
+        screen.filters = [StatusFilter::Seeding].into_iter().collect();
+        // Both torrents were somehow selected (simulating the bug scenario).
+        screen.selected_ids = [1, 2].into_iter().collect();
+        screen.selection_anchor = Some(2);
+
+        // FilterAllClicked: since `filters.len() != all().len()`, it populates all filters.
+        // After this, both torrents are visible.
+        let _ = update(&mut screen, Message::FilterAllClicked);
+        assert_eq!(
+            screen.filters.len(),
+            StatusFilter::all().len(),
+            "all filters activated means full visibility"
+        );
+        assert!(screen.selected_ids.contains(&1));
+        assert!(screen.selected_ids.contains(&2));
+    }
+
+    /// When the daemon stops reporting a selected torrent (removed / garbage-
+    /// collected), `TorrentsUpdated` must remove it from the selection.
+    #[test]
+    fn torrents_updated_removes_deleted_torrent_from_selection() {
+        let mut screen = make_screen();
+        screen.torrents = vec![make_torrent(10, "Gone"), make_torrent(11, "Here")];
+        screen.selected_ids = [10, 11].into_iter().collect();
+        screen.selection_anchor = Some(10);
+
+        // Daemon response no longer includes torrent 10 (e.g. it was deleted).
+        let new_torrents = vec![make_torrent(11, "Here")];
+        let _ = update(&mut screen, Message::TorrentsUpdated(Ok(new_torrents)));
+
+        assert!(
+            !screen.selected_ids.contains(&10),
+            "removed torrent must be pruned from selection"
+        );
+        assert!(
+            screen.selected_ids.contains(&11),
+            "surviving torrent stays selected"
+        );
+        assert_eq!(
+            screen.selection_anchor, None,
+            "anchor must be cleared when the anchor torrent disappears"
+        );
+    }
+
+    /// `prune_selection_to_visible` removes filtered-out IDs from `selected_ids`.
+    #[test]
+    fn prune_selection_to_visible_removes_filtered_ids() {
+        let mut screen = make_screen();
+        screen.torrents = vec![
+            TorrentData {
+                id: 1,
+                name: "Seeder".to_owned(),
+                status: 6,
+                ..Default::default()
+            },
+            TorrentData {
+                id: 2,
+                name: "Paused".to_owned(),
+                status: 0,
+                ..Default::default()
+            },
+        ];
+        screen.selected_ids = [1, 2].into_iter().collect();
+        screen.selection_anchor = Some(2);
+        // Only Seeding filter active — torrent 2 (Paused) is now hidden.
+        screen.filters = [StatusFilter::Seeding].into_iter().collect();
+
+        screen.prune_selection_to_visible();
+
+        assert!(screen.selected_ids.contains(&1));
+        assert!(!screen.selected_ids.contains(&2));
+        assert_eq!(screen.selection_anchor, None);
+    }
+
+    /// Shift-click range selection only spans visible (non-filtered) torrents.
+    #[test]
+    fn shift_click_range_respects_filter() {
+        let mut screen = make_screen();
+        // Five torrents: seeders (1, 3, 5) and paused (2, 4).
+        screen.torrents = vec![
+            TorrentData {
+                id: 1,
+                name: "S1".to_owned(),
+                status: 6,
+                ..Default::default()
+            },
+            TorrentData {
+                id: 2,
+                name: "P1".to_owned(),
+                status: 0,
+                ..Default::default()
+            },
+            TorrentData {
+                id: 3,
+                name: "S2".to_owned(),
+                status: 6,
+                ..Default::default()
+            },
+            TorrentData {
+                id: 4,
+                name: "P2".to_owned(),
+                status: 0,
+                ..Default::default()
+            },
+            TorrentData {
+                id: 5,
+                name: "S3".to_owned(),
+                status: 6,
+                ..Default::default()
+            },
+        ];
+        screen.filters = [StatusFilter::Seeding].into_iter().collect();
+
+        // Plain-click torrent 1 (first visible seeder) to set the anchor.
+        let _ = update(&mut screen, Message::TorrentSelected(1));
+        assert_eq!(screen.selection_anchor, Some(1));
+
+        // Shift-click torrent 5; the range should include only visible torrents (1,3,5).
+        screen.modifiers = Modifiers::SHIFT;
+        let _ = update(&mut screen, Message::TorrentSelected(5));
+        assert!(screen.selected_ids.contains(&1));
+        assert!(screen.selected_ids.contains(&3));
+        assert!(screen.selected_ids.contains(&5));
+        // Paused torrents must not be in the selection.
+        assert!(!screen.selected_ids.contains(&2));
+        assert!(!screen.selected_ids.contains(&4));
+    }
+
+    /// `KeyboardSelectAll` (Cmd+A) selects only visible torrents, not hidden ones.
+    #[test]
+    fn keyboard_select_all_only_selects_visible() {
+        let mut screen = make_screen();
+        screen.torrents = vec![
+            TorrentData {
+                id: 1,
+                name: "Seeder".to_owned(),
+                status: 6,
+                ..Default::default()
+            },
+            TorrentData {
+                id: 2,
+                name: "Paused".to_owned(),
+                status: 0,
+                ..Default::default()
+            },
+        ];
+        screen.filters = [StatusFilter::Seeding].into_iter().collect();
+
+        let _ = update(&mut screen, Message::KeyboardSelectAll);
+
+        assert!(
+            screen.selected_ids.contains(&1),
+            "visible torrent must be selected"
+        );
+        assert!(
+            !screen.selected_ids.contains(&2),
+            "filtered-out torrent must not be selected by Cmd+A"
+        );
     }
 }

@@ -102,7 +102,9 @@ impl MainScreen {
         let worker = Subscription::run(torrent_list::rpc_worker_stream).map(Message::List);
         let dialog_kb = self.list.dialog_subscription().map(Message::List);
         let cursor = self.list.cursor_subscription().map(Message::List);
-        Subscription::batch([tick, worker, dialog_kb, cursor])
+        let modifiers =
+            torrent_list::TorrentListScreen::modifiers_subscription().map(Message::List);
+        Subscription::batch([tick, worker, dialog_kb, cursor, modifiers])
     }
 
     /// Route messages to the appropriate child; intercept cross-cutting concerns.
@@ -145,22 +147,29 @@ impl MainScreen {
 
             // Intercept TorrentSelected so we can reset the inspector tab.
             Message::List(torrent_list::Message::TorrentSelected(id)) => {
-                let prev = self.list.selected_id;
+                let prev_single = self.list.selected_torrent().map(|t| t.id);
+                let prev_count = self.list.selected_ids.len();
                 let task = torrent_list::update(
                     &mut self.list,
                     torrent_list::Message::TorrentSelected(id),
                 )
                 .map(Message::List);
-                // Reset to General whenever a *new* torrent is selected.
-                if self.list.selected_id != prev && self.list.selected_id.is_some() {
+                let new_count = self.list.selected_ids.len();
+                let new_single = self.list.selected_torrent().map(|t| t.id);
+
+                if new_count == 1 && new_single != prev_single {
+                    // Transitioned to a different single selection.
                     self.inspector.active_tab = inspector::ActiveTab::General;
-                    // Clear stale file-wanted overrides from the previous selection.
                     self.inspector.pending_wanted.clear();
-                    // Reset Options draft to match the newly selected torrent.
+                    self.inspector.bulk_options = Default::default();
                     if let Some(torrent) = self.list.selected_torrent() {
                         self.inspector.options = InspectorOptionsState::from_torrent(torrent);
                     }
+                } else if new_count > 1 && prev_count <= 1 {
+                    // Transitioned into multi-select from none/single.
+                    self.inspector.bulk_options = Default::default();
                 }
+                // A Ctrl/Cmd-click within an existing multi-select does NOT reset bulk_options.
                 task
             }
 
@@ -202,7 +211,7 @@ impl MainScreen {
             // Download limit toggle: update state + send download_limited + download_limit.
             Message::Inspector(inspector::Message::OptionsDownloadLimitToggled(v)) => {
                 self.inspector.options.download_limited = v;
-                let Some(torrent_id) = self.list.selected_id else {
+                let Some(torrent_id) = self.list.selected_torrent().map(|t| t.id) else {
                     return Task::none();
                 };
                 let dl_limit: u64 = self
@@ -218,7 +227,7 @@ impl MainScreen {
                 };
                 self.list.enqueue(RpcWork::TorrentSetBandwidth {
                     params: self.list.params.clone(),
-                    torrent_id,
+                    ids: vec![torrent_id],
                     args,
                 });
                 Task::none()
@@ -227,7 +236,7 @@ impl MainScreen {
             // Upload limit toggle: update state + send upload_limited + upload_limit.
             Message::Inspector(inspector::Message::OptionsUploadLimitToggled(v)) => {
                 self.inspector.options.upload_limited = v;
-                let Some(torrent_id) = self.list.selected_id else {
+                let Some(torrent_id) = self.list.selected_torrent().map(|t| t.id) else {
                     return Task::none();
                 };
                 let ul_limit: u64 = self.inspector.options.upload_limit_val.parse().unwrap_or(0);
@@ -238,7 +247,7 @@ impl MainScreen {
                 };
                 self.list.enqueue(RpcWork::TorrentSetBandwidth {
                     params: self.list.params.clone(),
-                    torrent_id,
+                    ids: vec![torrent_id],
                     args,
                 });
                 Task::none()
@@ -247,7 +256,7 @@ impl MainScreen {
             // Ratio mode segmented control: update state + immediately enqueue RPC.
             Message::Inspector(inspector::Message::OptionsRatioModeChanged(v)) => {
                 self.inspector.options.ratio_mode = v;
-                let Some(torrent_id) = self.list.selected_id else {
+                let Some(torrent_id) = self.list.selected_torrent().map(|t| t.id) else {
                     return Task::none();
                 };
                 let ratio_limit: f64 = self
@@ -263,7 +272,7 @@ impl MainScreen {
                 };
                 self.list.enqueue(RpcWork::TorrentSetBandwidth {
                     params: self.list.params.clone(),
-                    torrent_id,
+                    ids: vec![torrent_id],
                     args,
                 });
                 Task::none()
@@ -273,7 +282,7 @@ impl MainScreen {
             // per-torrent limits take effect immediately when the torrent opts out of globals.
             Message::Inspector(inspector::Message::OptionsHonorGlobalToggled(v)) => {
                 self.inspector.options.honors_session_limits = v;
-                let Some(torrent_id) = self.list.selected_id else {
+                let Some(torrent_id) = self.list.selected_torrent().map(|t| t.id) else {
                     return Task::none();
                 };
                 let dl_limit: u64 = self
@@ -293,7 +302,7 @@ impl MainScreen {
                 };
                 self.list.enqueue(RpcWork::TorrentSetBandwidth {
                     params: self.list.params.clone(),
-                    torrent_id,
+                    ids: vec![torrent_id],
                     args,
                 });
                 Task::none()
@@ -301,7 +310,7 @@ impl MainScreen {
 
             // Text submit: apply limit only if the corresponding toggle is enabled.
             Message::Inspector(inspector::Message::OptionsDownloadLimitSubmitted) => {
-                let Some(torrent_id) = self.list.selected_id else {
+                let Some(torrent_id) = self.list.selected_torrent().map(|t| t.id) else {
                     return Task::none();
                 };
                 if !self.inspector.options.download_limited {
@@ -320,14 +329,14 @@ impl MainScreen {
                 };
                 self.list.enqueue(RpcWork::TorrentSetBandwidth {
                     params: self.list.params.clone(),
-                    torrent_id,
+                    ids: vec![torrent_id],
                     args,
                 });
                 Task::none()
             }
 
             Message::Inspector(inspector::Message::OptionsUploadLimitSubmitted) => {
-                let Some(torrent_id) = self.list.selected_id else {
+                let Some(torrent_id) = self.list.selected_torrent().map(|t| t.id) else {
                     return Task::none();
                 };
                 if !self.inspector.options.upload_limited {
@@ -341,14 +350,14 @@ impl MainScreen {
                 };
                 self.list.enqueue(RpcWork::TorrentSetBandwidth {
                     params: self.list.params.clone(),
-                    torrent_id,
+                    ids: vec![torrent_id],
                     args,
                 });
                 Task::none()
             }
 
             Message::Inspector(inspector::Message::OptionsRatioLimitSubmitted) => {
-                let Some(torrent_id) = self.list.selected_id else {
+                let Some(torrent_id) = self.list.selected_torrent().map(|t| t.id) else {
                     return Task::none();
                 };
                 // Only apply if in Custom mode (mode 1).
@@ -368,7 +377,192 @@ impl MainScreen {
                 };
                 self.list.enqueue(RpcWork::TorrentSetBandwidth {
                     params: self.list.params.clone(),
-                    torrent_id,
+                    ids: vec![torrent_id],
+                    args,
+                });
+                Task::none()
+            }
+
+            // ── Bulk Options intercepts (multi-select mode) ───────────────────
+            Message::Inspector(inspector::Message::BulkDownloadLimitToggled(v)) => {
+                let ids: Vec<i64> = self.list.selected_ids.iter().copied().collect();
+                let task = inspector::update(
+                    &mut self.inspector,
+                    inspector::Message::BulkDownloadLimitToggled(v),
+                )
+                .map(Message::Inspector);
+                if !ids.is_empty() {
+                    let args = TorrentBandwidthArgs {
+                        download_limited: Some(v),
+                        download_limit: if v {
+                            self.inspector.bulk_options.download_limit_val.parse().ok()
+                        } else {
+                            None
+                        },
+                        ..Default::default()
+                    };
+                    self.list.enqueue(RpcWork::TorrentSetBandwidth {
+                        params: self.list.params.clone(),
+                        ids,
+                        args,
+                    });
+                }
+                task
+            }
+
+            Message::Inspector(inspector::Message::BulkUploadLimitToggled(v)) => {
+                let ids: Vec<i64> = self.list.selected_ids.iter().copied().collect();
+                let task = inspector::update(
+                    &mut self.inspector,
+                    inspector::Message::BulkUploadLimitToggled(v),
+                )
+                .map(Message::Inspector);
+                if !ids.is_empty() {
+                    let args = TorrentBandwidthArgs {
+                        upload_limited: Some(v),
+                        upload_limit: if v {
+                            self.inspector.bulk_options.upload_limit_val.parse().ok()
+                        } else {
+                            None
+                        },
+                        ..Default::default()
+                    };
+                    self.list.enqueue(RpcWork::TorrentSetBandwidth {
+                        params: self.list.params.clone(),
+                        ids,
+                        args,
+                    });
+                }
+                task
+            }
+
+            Message::Inspector(inspector::Message::BulkRatioModeChanged(v)) => {
+                let ids: Vec<i64> = self.list.selected_ids.iter().copied().collect();
+                let task = inspector::update(
+                    &mut self.inspector,
+                    inspector::Message::BulkRatioModeChanged(v),
+                )
+                .map(Message::Inspector);
+                if !ids.is_empty() {
+                    let args = TorrentBandwidthArgs {
+                        seed_ratio_mode: Some(v),
+                        ..Default::default()
+                    };
+                    self.list.enqueue(RpcWork::TorrentSetBandwidth {
+                        params: self.list.params.clone(),
+                        ids,
+                        args,
+                    });
+                }
+                task
+            }
+
+            Message::Inspector(inspector::Message::BulkHonorGlobalToggled(v)) => {
+                let ids: Vec<i64> = self.list.selected_ids.iter().copied().collect();
+                let task = inspector::update(
+                    &mut self.inspector,
+                    inspector::Message::BulkHonorGlobalToggled(v),
+                )
+                .map(Message::Inspector);
+                if !ids.is_empty() {
+                    let args = TorrentBandwidthArgs {
+                        honors_session_limits: Some(v),
+                        ..Default::default()
+                    };
+                    self.list.enqueue(RpcWork::TorrentSetBandwidth {
+                        params: self.list.params.clone(),
+                        ids,
+                        args,
+                    });
+                }
+                task
+            }
+
+            Message::Inspector(inspector::Message::BulkDownloadLimitSubmitted) => {
+                let ids: Vec<i64> = self.list.selected_ids.iter().copied().collect();
+                if ids.is_empty()
+                    || !self
+                        .inspector
+                        .bulk_options
+                        .download_limited
+                        .unwrap_or(false)
+                {
+                    return inspector::update(
+                        &mut self.inspector,
+                        inspector::Message::BulkDownloadLimitSubmitted,
+                    )
+                    .map(Message::Inspector);
+                }
+                let limit = self
+                    .inspector
+                    .bulk_options
+                    .download_limit_val
+                    .parse()
+                    .unwrap_or(0);
+                let args = TorrentBandwidthArgs {
+                    download_limited: Some(true),
+                    download_limit: Some(limit),
+                    ..Default::default()
+                };
+                self.list.enqueue(RpcWork::TorrentSetBandwidth {
+                    params: self.list.params.clone(),
+                    ids,
+                    args,
+                });
+                Task::none()
+            }
+
+            Message::Inspector(inspector::Message::BulkUploadLimitSubmitted) => {
+                let ids: Vec<i64> = self.list.selected_ids.iter().copied().collect();
+                if ids.is_empty() || !self.inspector.bulk_options.upload_limited.unwrap_or(false) {
+                    return inspector::update(
+                        &mut self.inspector,
+                        inspector::Message::BulkUploadLimitSubmitted,
+                    )
+                    .map(Message::Inspector);
+                }
+                let limit = self
+                    .inspector
+                    .bulk_options
+                    .upload_limit_val
+                    .parse()
+                    .unwrap_or(0);
+                let args = TorrentBandwidthArgs {
+                    upload_limited: Some(true),
+                    upload_limit: Some(limit),
+                    ..Default::default()
+                };
+                self.list.enqueue(RpcWork::TorrentSetBandwidth {
+                    params: self.list.params.clone(),
+                    ids,
+                    args,
+                });
+                Task::none()
+            }
+
+            Message::Inspector(inspector::Message::BulkRatioLimitSubmitted) => {
+                let ids: Vec<i64> = self.list.selected_ids.iter().copied().collect();
+                if ids.is_empty() || self.inspector.bulk_options.ratio_mode != Some(1) {
+                    return inspector::update(
+                        &mut self.inspector,
+                        inspector::Message::BulkRatioLimitSubmitted,
+                    )
+                    .map(Message::Inspector);
+                }
+                let ratio: f64 = self
+                    .inspector
+                    .bulk_options
+                    .ratio_limit_val
+                    .parse()
+                    .unwrap_or(0.0);
+                let args = TorrentBandwidthArgs {
+                    seed_ratio_mode: Some(1),
+                    seed_ratio_limit: Some(ratio),
+                    ..Default::default()
+                };
+                self.list.enqueue(RpcWork::TorrentSetBandwidth {
+                    params: self.list.params.clone(),
+                    ids,
                     args,
                 });
                 Task::none()
@@ -452,22 +646,23 @@ impl MainScreen {
         let list_elem =
             torrent_list::view(&self.list, theme_mode, alt_speed_enabled).map(Message::List);
 
-        let content: Element<Message> = match self.list.selected_torrent() {
-            None => list_elem,
-            Some(torrent) => {
-                let inspector_elem =
-                    inspector::view(&self.inspector, torrent).map(Message::Inspector);
-                column![
-                    container(list_elem)
-                        .height(Length::FillPortion(3))
-                        .width(Length::Fill),
-                    container(inspector_elem)
-                        .height(Length::FillPortion(2))
-                        .width(Length::Fill)
-                        .style(crate::theme::m3_card),
-                ]
-                .into()
-            }
+        let selected_count = self.list.selected_ids.len();
+        let content: Element<Message> = if selected_count == 0 {
+            list_elem
+        } else {
+            let torrent = self.list.selected_torrent();
+            let inspector_elem =
+                inspector::view(&self.inspector, torrent, selected_count).map(Message::Inspector);
+            column![
+                container(list_elem)
+                    .height(Length::FillPortion(3))
+                    .width(Length::Fill),
+                container(inspector_elem)
+                    .height(Length::FillPortion(2))
+                    .width(Length::Fill)
+                    .style(crate::theme::m3_card),
+            ]
+            .into()
         };
 
         // Lift the context menu overlay to this level so it can draw over the
@@ -522,7 +717,7 @@ mod tests {
         screen.list.torrents = vec![make_torrent(1), make_torrent(2)];
 
         let _ = screen.update(Message::List(TLMsg::TorrentSelected(1)));
-        assert_eq!(screen.list.selected_id, Some(1));
+        assert!(screen.list.selected_ids.contains(&1));
         assert_eq!(screen.inspector.active_tab, ActiveTab::General);
 
         let _ = screen.update(Message::Inspector(inspector::Message::TabSelected(
@@ -532,7 +727,7 @@ mod tests {
 
         // Select a different torrent — tab should reset.
         let _ = screen.update(Message::List(TLMsg::TorrentSelected(2)));
-        assert_eq!(screen.list.selected_id, Some(2));
+        assert!(screen.list.selected_ids.contains(&2));
         assert_eq!(
             screen.inspector.active_tab,
             ActiveTab::General,
@@ -552,13 +747,16 @@ mod tests {
         )));
         assert_eq!(screen.inspector.active_tab, ActiveTab::Peers);
 
-        // Clicking the same row deselects.
+        // Clicking a different row clears the first selection (plain-click replaces).
         let _ = screen.update(Message::List(TLMsg::TorrentSelected(1)));
-        assert_eq!(screen.list.selected_id, None);
+        assert!(
+            screen.list.selected_ids.contains(&1),
+            "clicking the same row re-selects (plain click always replaces)"
+        );
         assert_eq!(
             screen.inspector.active_tab,
             ActiveTab::Peers,
-            "tab should stay on Peers after deselection"
+            "tab should stay on Peers after re-selecting the same torrent"
         );
     }
 
@@ -615,19 +813,16 @@ mod tests {
         let bandwidth_items: Vec<_> = work
             .into_iter()
             .filter_map(|w| {
-                if let RpcWork::TorrentSetBandwidth {
-                    torrent_id, args, ..
-                } = w
-                {
-                    Some((torrent_id, args))
+                if let RpcWork::TorrentSetBandwidth { ids, args, .. } = w {
+                    Some((ids, args))
                 } else {
                     None
                 }
             })
             .collect();
         assert_eq!(bandwidth_items.len(), 1);
-        let (tid, args) = &bandwidth_items[0];
-        assert_eq!(*tid, 1);
+        let (ids, args) = &bandwidth_items[0];
+        assert!(ids.contains(&1));
         assert_eq!(args.honors_session_limits, Some(false));
         assert_eq!(args.download_limited, Some(true));
         assert_eq!(args.download_limit, Some(800));
@@ -652,11 +847,8 @@ mod tests {
         let (_, args) = work
             .into_iter()
             .find_map(|w| {
-                if let RpcWork::TorrentSetBandwidth {
-                    torrent_id, args, ..
-                } = w
-                {
-                    Some((torrent_id, args))
+                if let RpcWork::TorrentSetBandwidth { ids, args, .. } = w {
+                    Some((ids, args))
                 } else {
                     None
                 }
@@ -691,11 +883,8 @@ mod tests {
         let (_, args) = work
             .into_iter()
             .find_map(|w| {
-                if let RpcWork::TorrentSetBandwidth {
-                    torrent_id, args, ..
-                } = w
-                {
-                    Some((torrent_id, args))
+                if let RpcWork::TorrentSetBandwidth { ids, args, .. } = w {
+                    Some((ids, args))
                 } else {
                     None
                 }
@@ -720,11 +909,8 @@ mod tests {
         let (_, args) = work
             .into_iter()
             .find_map(|w| {
-                if let RpcWork::TorrentSetBandwidth {
-                    torrent_id, args, ..
-                } = w
-                {
-                    Some((torrent_id, args))
+                if let RpcWork::TorrentSetBandwidth { ids, args, .. } = w {
+                    Some((ids, args))
                 } else {
                     None
                 }
@@ -817,11 +1003,8 @@ mod tests {
         let (_, args) = drain(&mut rx)
             .into_iter()
             .find_map(|w| {
-                if let RpcWork::TorrentSetBandwidth {
-                    torrent_id, args, ..
-                } = w
-                {
-                    Some((torrent_id, args))
+                if let RpcWork::TorrentSetBandwidth { ids, args, .. } = w {
+                    Some((ids, args))
                 } else {
                     None
                 }
@@ -861,11 +1044,8 @@ mod tests {
         let (_, args) = drain(&mut rx)
             .into_iter()
             .find_map(|w| {
-                if let RpcWork::TorrentSetBandwidth {
-                    torrent_id, args, ..
-                } = w
-                {
-                    Some((torrent_id, args))
+                if let RpcWork::TorrentSetBandwidth { ids, args, .. } = w {
+                    Some((ids, args))
                 } else {
                     None
                 }
@@ -904,11 +1084,8 @@ mod tests {
         let (_, args) = drain(&mut rx)
             .into_iter()
             .find_map(|w| {
-                if let RpcWork::TorrentSetBandwidth {
-                    torrent_id, args, ..
-                } = w
-                {
-                    Some((torrent_id, args))
+                if let RpcWork::TorrentSetBandwidth { ids, args, .. } = w {
+                    Some((ids, args))
                 } else {
                     None
                 }
