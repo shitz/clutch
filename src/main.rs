@@ -39,6 +39,9 @@ fn main() -> iced::Result {
                 height: 600.0,
             }),
             icon,
+            // Do not exit when the close button is clicked; instead the tray
+            // subscription intercepts the event and hides the window.
+            exit_on_close_request: false,
             ..Default::default()
         })
         .run()

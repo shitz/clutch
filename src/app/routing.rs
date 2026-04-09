@@ -21,10 +21,12 @@ use iced::Task;
 
 use crate::auth::{AuthDialog, PendingAction};
 use crate::profile::{ConnectionProfile, ProfileStore, resolve_theme_config};
+use crate::rpc::worker::RpcWork;
 use crate::rpc::{self, SessionData, SessionSetArgs, TransmissionCredentials};
 use crate::screens::connection::{self, ConnectionScreen};
 use crate::screens::main_screen::{self, MainScreen};
 use crate::screens::settings::{SettingsScreen, SettingsTab};
+use crate::screens::torrent_list;
 
 use super::{AppState, Message, Screen};
 
@@ -49,17 +51,105 @@ pub(super) fn handle_global_message(
         Message::Main(main_screen::Message::Disconnect) => {
             tracing::info!("Disconnecting; returning to connection launchpad");
             state.active_profile = None;
+            if let Some(tray) = &state.tray {
+                tray.items.set_connected(false);
+                tray.items.reset_speeds();
+            }
             Some(show_connection_launchpad(state))
         }
         Message::Main(main_screen::Message::OpenSettingsClicked) => {
             open_settings(state, SettingsTab::General);
             Some(Task::none())
         }
-        Message::Main(main_screen::Message::TurtleModeToggled) => Some(toggle_turtle_mode(state)),
+        Message::Main(main_screen::Message::TurtleModeToggled) => {
+            // Optimistically flip the tray checkmark now, before the async
+            // session-set round-trip completes. SessionDataLoaded will confirm
+            // (or correct) the state once the next poll arrives.
+            if let Some(tray) = &state.tray {
+                tray.items
+                    .turtle_mode
+                    .set_text(if !state.alt_speed_enabled {
+                        "● Turtle Mode"
+                    } else {
+                        "○ Turtle Mode"
+                    });
+            }
+            Some(toggle_turtle_mode(state))
+        }
         Message::Main(main_screen::Message::SessionDataLoaded(data)) => {
             state.alt_speed_enabled = data.alt_speed_enabled;
+            if let Some(tray) = &state.tray {
+                tray.items.set_turtle_active(data.alt_speed_enabled);
+            }
             Some(Task::none())
         }
+        // Update tray speed labels on every poll; return None so main still processes it.
+        Message::Main(main_screen::Message::List(torrent_list::Message::TorrentsUpdated(Ok(
+            torrents,
+        )))) => {
+            if let Some(tray) = &state.tray {
+                let dl: i64 = torrents.iter().map(|t| t.rate_download).sum();
+                let ul: i64 = torrents.iter().map(|t| t.rate_upload).sum();
+                tray.items
+                    .speed_down
+                    .set_text(format!("↓  {}", crate::format::format_speed(dl)));
+                tray.items
+                    .speed_up
+                    .set_text(format!("↑  {}", crate::format::format_speed(ul)));
+            }
+            None
+        }
+        // Hide the main window instead of exiting when the close button is clicked.
+        Message::WindowCloseRequested(id) => {
+            state.main_window_id = Some(*id);
+            Some(iced::window::set_mode(*id, iced::window::Mode::Hidden))
+        }
+        // Restore or surface the main window from the tray / behind other windows.
+        Message::TrayAction(crate::tray::TrayAction::ShowWindow) => {
+            let task = if let Some(id) = state.main_window_id {
+                // Window was hidden via the close button; restore and focus.
+                Task::batch([
+                    iced::window::set_mode(id, iced::window::Mode::Windowed),
+                    iced::window::gain_focus(id),
+                ])
+            } else {
+                // Window is visible but may be behind other windows.
+                // Resolve the main window ID at runtime and bring it to front.
+                iced::window::oldest().then(|opt_id| match opt_id {
+                    Some(id) => iced::window::gain_focus(id),
+                    None => Task::none(),
+                })
+            };
+            Some(task)
+        }
+        Message::TrayAction(crate::tray::TrayAction::PauseAll) => {
+            if let Screen::Main(main) = &mut state.screen {
+                let ids: Vec<i64> = main.list.torrents.iter().map(|t| t.id).collect();
+                if !ids.is_empty() {
+                    main.list.enqueue(RpcWork::TorrentStop {
+                        params: main.list.params.clone(),
+                        ids,
+                    });
+                }
+            }
+            Some(Task::none())
+        }
+        Message::TrayAction(crate::tray::TrayAction::ResumeAll) => {
+            if let Screen::Main(main) = &mut state.screen {
+                let ids: Vec<i64> = main.list.torrents.iter().map(|t| t.id).collect();
+                if !ids.is_empty() {
+                    main.list.enqueue(RpcWork::TorrentStart {
+                        params: main.list.params.clone(),
+                        ids,
+                    });
+                }
+            }
+            Some(Task::none())
+        }
+        Message::TrayAction(crate::tray::TrayAction::ToggleTurtle) => Some(Task::done(
+            Message::Main(main_screen::Message::TurtleModeToggled),
+        )),
+        Message::TrayAction(crate::tray::TrayAction::Exit) => Some(iced::exit()),
         Message::Connection(connection::Message::ManageProfilesClicked) => {
             open_settings(state, SettingsTab::Connections);
             Some(Task::none())
@@ -83,6 +173,10 @@ pub(super) fn handle_connection_message(state: &mut AppState, message: Message) 
     };
 
     state.alt_speed_enabled = success.alt_speed_enabled;
+    if let Some(tray) = &state.tray {
+        tray.items.set_connected(true);
+        tray.items.set_turtle_active(success.alt_speed_enabled);
+    }
 
     if let Some(profile_id) = success.profile_id {
         state.active_profile = Some(profile_id);
@@ -267,6 +361,10 @@ fn apply_auto_connect_result(
             let profile_name = profile.name.clone();
             tracing::info!(profile = %profile_name, "Auto-connect succeeded");
             state.alt_speed_enabled = info.alt_speed_enabled;
+            if let Some(tray) = &state.tray {
+                tray.items.set_connected(true);
+                tray.items.set_turtle_active(info.alt_speed_enabled);
+            }
 
             let push_task = make_push_bandwidth_task(
                 &credentials.rpc_url(),

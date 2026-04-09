@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- System tray icon with a native context menu: Clutch minimises to the system tray instead of
+  quitting when the window close button is clicked. The context menu provides Resume All, Pause
+  All, Turtle Mode toggle (with live checked state), Show Clutch, and Exit actions.
+- Live aggregate download/upload speed labels in the tray context menu, updated on every torrent
+  poll using per-torrent rate data.
 - Multi-select in the torrent list: plain click selects a single torrent, Ctrl/Cmd-click
   toggles individual rows, Shift-click extends a contiguous range from the anchor row, and
   Cmd+A / Ctrl+A selects all visible (filtered) torrents.

@@ -11,6 +11,7 @@ dark-light = "1"
 dirs = "5"
 iced = { version = "0.14", features = ["tokio", "canvas", "image"] }
 iced_aw = { version = "0.13", features = ["tabs"] }
+image = "0.25"
 lava_torrent = "0.11"
 rand = "0.8"
 secrecy = { version = "0.8", features = ["alloc"] }
@@ -22,6 +23,7 @@ tokio = { version = "1", features = ["full"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tray-icon = "0.21"
 uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]

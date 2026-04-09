@@ -26,3 +26,4 @@ pub mod profile;
 pub mod rpc;
 pub mod screens;
 pub mod theme;
+pub mod tray;

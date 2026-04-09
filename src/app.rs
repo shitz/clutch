@@ -119,6 +119,13 @@ pub enum Message {
 
     /// Fire-and-forget: result of a background save; no state change needed.
     Noop,
+
+    // -- Tray --
+    /// An action dispatched from the native system tray context menu or icon click.
+    TrayAction(crate::tray::TrayAction),
+    /// The main window's close button was clicked. We intercept it to hide
+    /// instead of exit so the app continues running in the system tray.
+    WindowCloseRequested(iced::window::Id),
 }
 
 // ── Theme mode ────────────────────────────────────────────────────────────────
@@ -156,6 +163,12 @@ pub struct AppState {
     pub active_dialog: Option<AuthDialog>,
     /// Whether Turtle Mode (alternative speed limits) is currently active on the daemon.
     pub alt_speed_enabled: bool,
+    /// Owned system tray icon and mutable menu-item handles.
+    /// `None` on platforms where tray creation fails (e.g. bare Linux).
+    pub tray: Option<crate::tray::TrayState>,
+    /// ID of the main application window, captured on the first window event.
+    /// Used to hide and restore the window when the user interacts with the tray.
+    pub main_window_id: Option<iced::window::Id>,
 }
 
 impl AppState {
@@ -167,6 +180,12 @@ impl AppState {
         // draw — before the async ProfilesLoaded message can arrive.
         let initial = crate::profile::ProfileStore::load_sync();
         let theme = resolve_theme_config(initial.general.theme);
+        // muda (the tray-icon menu backend) panics if its `Menu` is constructed
+        // on a non-main thread. Tests run on worker threads, so skip tray init.
+        #[cfg(not(test))]
+        let tray = crate::tray::build();
+        #[cfg(test)]
+        let tray = None;
         let state = AppState {
             screen: Screen::Connection(ConnectionScreen::default()),
             theme,
@@ -176,6 +195,8 @@ impl AppState {
             unlocked_passphrase: None,
             active_dialog: None,
             alt_speed_enabled: false,
+            tray,
+            main_window_id: None,
         };
         // Re-emit the already-loaded store via Task::done so ProfilesLoaded
         // runs on the first event-loop tick (auto-connect, launchpad rebuild)
@@ -242,5 +263,14 @@ pub fn view(state: &AppState) -> Element<'_, Message> {
 
 /// Return active subscriptions.
 pub fn subscription(state: &AppState) -> Subscription<Message> {
-    keyboard::subscription(state)
+    let keyboard = keyboard::subscription(state);
+
+    // Listen for the window close button so we can hide to tray instead of exit.
+    let window_events = iced::window::close_requests().map(Message::WindowCloseRequested);
+
+    if state.tray.is_some() {
+        Subscription::batch([keyboard, window_events, crate::tray::subscription()])
+    } else {
+        Subscription::batch([keyboard, window_events])
+    }
 }
