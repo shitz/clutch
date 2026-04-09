@@ -29,8 +29,8 @@ pub enum Screen {
 ```
 
 **Message Dispatch:** Each screen has its own Message enum. The top-level `app::Message` wraps these
-and routes them to the active screen's `update()` function, handling global intercepts (like opening
-settings or locking the app) at the top level.
+and routes them through `app.rs`, which delegates startup/global flow, settings-result reconciliation,
+and screen-specific keyboard subscriptions to private `src/app/` helpers.
 
 ## The RPC Layer & Data Flow
 
@@ -74,7 +74,8 @@ A quick map of where to find things:
 ```text
 src/
 ├── main.rs          # Entry point, window constraints, tracing setup
-├── app.rs           # AppState, Screen router, top-level update/view
+├── app.rs           # AppState, Screen router, top-level facade for update/view
+├── app/             # Private routing, settings bridge, and keyboard helpers
 ├── rpc/             # Transmission API, types, and the serialized worker
 ├── screens/         # Individual screen states and views
 │   ├── connection/  # Profile selection and quick-connect

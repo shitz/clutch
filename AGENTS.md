@@ -113,13 +113,14 @@ Do **not** keep a separate `bool` flag for this purpose.
 ```text
 src/
 ├── main.rs          # Entry point only — window setup, font registration, tracing init
-├── app.rs           # AppState, Screen router, top-level update/view/subscription
+├── app.rs           # AppState, Screen router, top-level facade for update/view/subscription
+├── app/             # Private routing, settings-bridge, and keyboard helpers backing crate::app
 ├── rpc/             # Transmission RPC: api, models, transport, worker (serialized queue)
 ├── screens/
 │   ├── connection.rs        # Profile selection / quick-connect
 │   ├── main_screen.rs       # Root layout: torrent list + inspector split
 │   ├── inspector.rs         # Detail inspector panel
-│   └── torrent_list/        # List, sort, add-torrent dialog (split into view/update/worker)
+│   └── torrent_list/        # List screen: view orchestration, toolbar/header/dialog helpers, sort, add-torrent, update, worker
 │   └── settings/            # Profile editing (split into state/draft/update/view)
 ├── auth.rs          # Passphrase setup and unlock flows
 ├── crypto.rs        # Argon2id KDF + ChaCha20-Poly1305 AEAD

@@ -17,12 +17,20 @@
 //!
 //! - [`sort`] — Pure column-sort logic (no UI dependencies)
 //! - [`add_dialog`] — Add-torrent modal dialog state and view
-//! - [`view`] — Widget-tree rendering (toolbar, header, rows)
+//! - [`filters`] — Pure status-bucket counting and visibility helpers
+//! - [`toolbar`] — Torrent-list toolbar rendering
+//! - [`columns`] — Sticky header and sort-indicator rendering
+//! - [`dialogs`] — Context-menu and modal overlay rendering
+//! - [`view`] — Widget-tree rendering orchestration and row rendering
 //! - [`update`] — Elm update function
 //! - [`worker`] — Serialized RPC worker subscription stream
 
 pub mod add_dialog;
+mod columns;
+mod dialogs;
+mod filters;
 pub mod sort;
+mod toolbar;
 mod update;
 pub mod view;
 pub mod worker;
@@ -38,9 +46,10 @@ use sort::{SortColumn, SortDir};
 
 // Re-export for parent modules.
 pub use add_dialog::FileReadResult;
+pub use dialogs::view_context_menu_overlay;
+pub use filters::matching_filters;
 pub use update::update;
 pub use view::view;
-pub use view::view_context_menu_overlay;
 pub use worker::rpc_worker_stream;
 
 // ── SetLocationDialog ───────────────────────────────────────────────────────────────
@@ -87,27 +96,6 @@ impl StatusFilter {
             StatusFilter::Error,
         ]
     }
-}
-
-/// Returns all [`StatusFilter`] buckets that apply to `t`.
-///
-/// A torrent may match more than one bucket simultaneously; for example, a
-/// torrent actively downloading at 500 KB/s will be in both `Downloading` and
-/// `Active`. The caller should use `.iter().any(|f| set.contains(f))` to
-/// decide visibility.
-pub fn matching_filters(t: &TorrentData) -> Vec<StatusFilter> {
-    let mut out = Vec::with_capacity(2);
-    match t.status {
-        3 | 4 => out.push(StatusFilter::Downloading),
-        5 | 6 => out.push(StatusFilter::Seeding),
-        0 => out.push(StatusFilter::Paused),
-        1 | 2 => out.push(StatusFilter::Error),
-        _ => {}
-    }
-    if t.rate_download > 0 || t.rate_upload > 0 {
-        out.push(StatusFilter::Active);
-    }
-    out
 }
 
 use iced::Subscription;
