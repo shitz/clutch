@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Editable draft types used by the settings connections tab.
+
 use uuid::Uuid;
 
 use crate::profile::ConnectionProfile;
@@ -61,6 +63,7 @@ pub enum TestResult {
 }
 
 impl ProfileDraft {
+    /// Build a draft from an existing saved profile.
     pub fn from_profile(profile: &ConnectionProfile) -> Self {
         Self {
             id: profile.id,
@@ -104,6 +107,7 @@ impl ProfileDraft {
         }
     }
 
+    /// Build a draft for a newly created blank profile.
     pub fn from_blank(profile: &ConnectionProfile) -> Self {
         Self {
             id: profile.id,
@@ -127,6 +131,7 @@ impl ProfileDraft {
         }
     }
 
+    /// Convert the current draft into runtime credentials when the port is valid.
     pub fn to_credentials(&self) -> Option<TransmissionCredentials> {
         let port: u16 = self.port.parse().ok()?;
         Some(TransmissionCredentials {

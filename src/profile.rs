@@ -295,7 +295,7 @@ port = 9091
 "#
     }
 
-    /// 2.6a – Valid TOML parses correctly.
+    /// Valid TOML parses correctly.
     #[test]
     fn load_parses_valid_toml() {
         let store: ProfileStore = toml::from_str(sample_toml()).unwrap();
@@ -306,7 +306,7 @@ port = 9091
         assert!(store.last_connected.is_some());
     }
 
-    /// 2.6b – Missing file yields empty defaults (simulated by parsing empty string).
+    /// Missing file input yields empty defaults when parsed from an empty string.
     #[test]
     fn load_empty_toml_gives_defaults() {
         let store: ProfileStore = toml::from_str("").unwrap();
@@ -316,7 +316,7 @@ port = 9091
         assert!(store.last_connected.is_none());
     }
 
-    /// 2.6c – Corrupt TOML fails to parse.
+    /// Corrupt TOML fails to parse.
     #[test]
     fn load_corrupt_toml_fails() {
         let result: Result<ProfileStore, _> = toml::from_str("[[not valid toml{{");

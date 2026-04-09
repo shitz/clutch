@@ -20,15 +20,13 @@
 //! 2. **Unlock** — session unlock: verifies the entered passphrase against the
 //!    stored PHC hash, then executes the deferred [`PendingAction`].
 
+mod update;
+mod view;
+
+pub use update::handle_message;
+pub use view::view_overlay;
+
 use uuid::Uuid;
-
-use iced::widget::{Space, button, column, container, row, stack, text, text_input};
-use iced::{Element, Length, Task};
-use secrecy::SecretString;
-
-use crate::app::{AppState, Message};
-use crate::crypto;
-use crate::screens::connection;
 
 // ── Stable widget IDs for auth dialog inputs ────────────────────────────────────
 
@@ -76,514 +74,6 @@ pub enum AuthDialog {
     },
 }
 
-// ── State machine ─────────────────────────────────────────────────────────────
-
-/// Handle an auth dialog message.
-///
-/// Returns `Some(task)` if the message was consumed by the auth state machine,
-/// or `None` if it should be forwarded to the per-screen update handler.
-pub fn handle_message(state: &mut AppState, message: &Message) -> Option<Task<Message>> {
-    match message {
-        Message::AuthTabKeyPressed { shift } => {
-            match &state.active_dialog {
-                Some(AuthDialog::SetupPassphrase { .. }) => {
-                    // Two-input ring: passphrase ↔ confirm.
-                    // We don't track which is focused, so we always use focus_next /
-                    // focus_previous which cycles naturally within the opaque overlay.
-                    let task = if *shift {
-                        iced::widget::operation::focus_previous()
-                    } else {
-                        iced::widget::operation::focus_next()
-                    };
-                    Some(task)
-                }
-                // Unlock dialog has one input — Tab is a no-op.
-                Some(AuthDialog::Unlock { .. }) => Some(Task::none()),
-                None => None,
-            }
-        }
-        Message::AuthEnterPressed => match &state.active_dialog {
-            Some(AuthDialog::Unlock { is_processing, .. }) if !*is_processing => {
-                Some(Task::done(Message::SubmitUnlockPassphrase))
-            }
-            Some(AuthDialog::SetupPassphrase { is_processing, .. }) if !*is_processing => {
-                Some(Task::done(Message::SubmitSetupPassphrase))
-            }
-            Some(_) => Some(Task::none()),
-            None => None,
-        },
-        Message::DismissAuthDialog => {
-            state.active_dialog = None;
-            Some(Task::none())
-        }
-        Message::AuthSetupPassphraseChanged(v) => {
-            if let Some(AuthDialog::SetupPassphrase {
-                passphrase_input,
-                error,
-                ..
-            }) = &mut state.active_dialog
-            {
-                *passphrase_input = v.clone();
-                *error = None;
-            }
-            Some(Task::none())
-        }
-        Message::AuthSetupConfirmChanged(v) => {
-            if let Some(AuthDialog::SetupPassphrase {
-                confirm_input,
-                error,
-                ..
-            }) = &mut state.active_dialog
-            {
-                *confirm_input = v.clone();
-                *error = None;
-            }
-            Some(Task::none())
-        }
-        Message::AuthUnlockPassphraseChanged(v) => {
-            if let Some(AuthDialog::Unlock {
-                passphrase_input,
-                error,
-                ..
-            }) = &mut state.active_dialog
-            {
-                *passphrase_input = v.clone();
-                *error = None;
-            }
-            Some(Task::none())
-        }
-        Message::SubmitSetupPassphrase => {
-            let Some(AuthDialog::SetupPassphrase {
-                pending_profile_id,
-                pending_password,
-                passphrase_input,
-                confirm_input,
-                error,
-                is_processing,
-            }) = &mut state.active_dialog
-            else {
-                return Some(Task::none());
-            };
-            if *is_processing {
-                return Some(Task::none());
-            }
-            if passphrase_input != confirm_input {
-                *error = Some("Passphrases do not match".to_owned());
-                return Some(Task::none());
-            }
-            if passphrase_input.is_empty() {
-                *error = Some("Passphrase cannot be empty".to_owned());
-                return Some(Task::none());
-            }
-            let profile_id = *pending_profile_id;
-            let password = pending_password.clone();
-            let passphrase = passphrase_input.clone();
-            *is_processing = true;
-            let task = Task::perform(
-                async move {
-                    let passphrase_c = passphrase.clone();
-                    let (hash, encrypted) = tokio::task::spawn_blocking(move || {
-                        let hash = crypto::hash_passphrase(&passphrase_c);
-                        let encrypted = crypto::encrypt_password(&passphrase_c, &password);
-                        (hash, encrypted)
-                    })
-                    .await
-                    .expect("passphrase setup task panicked");
-                    (passphrase, hash, profile_id, encrypted)
-                },
-                |(passphrase, hash, pid, ep)| Message::SetupPassphraseComplete {
-                    passphrase,
-                    hash,
-                    profile_id: pid,
-                    encrypted_password: ep,
-                },
-            );
-            Some(task)
-        }
-        Message::SetupPassphraseComplete {
-            passphrase,
-            hash,
-            profile_id,
-            encrypted_password,
-        } => {
-            state.active_dialog = None;
-            state.unlocked_passphrase = Some(SecretString::new(passphrase.clone()));
-            state.profiles.master_passphrase_hash = Some(hash.clone());
-            if let Some(p) = state
-                .profiles
-                .profiles
-                .iter_mut()
-                .find(|p| p.id == *profile_id)
-            {
-                p.encrypted_password = Some(encrypted_password.clone());
-            }
-            let snap = state.profiles.clone();
-            Some(Task::perform(async move { snap.save().await }, |_| {
-                Message::Noop
-            }))
-        }
-        Message::SubmitUnlockPassphrase => {
-            let Some(AuthDialog::Unlock {
-                passphrase_input,
-                is_processing,
-                ..
-            }) = &state.active_dialog
-            else {
-                return Some(Task::none());
-            };
-            if *is_processing {
-                return Some(Task::none());
-            }
-            if passphrase_input.is_empty() {
-                if let Some(AuthDialog::Unlock { error, .. }) = &mut state.active_dialog {
-                    *error = Some("Passphrase cannot be empty".to_owned());
-                }
-                return Some(Task::none());
-            }
-            let passphrase = passphrase_input.clone();
-            let hash = state
-                .profiles
-                .master_passphrase_hash
-                .clone()
-                .unwrap_or_default();
-            if let Some(AuthDialog::Unlock { is_processing, .. }) = &mut state.active_dialog {
-                *is_processing = true;
-            }
-            let task = Task::perform(
-                async move {
-                    let passphrase_c = passphrase.clone();
-                    let valid = tokio::task::spawn_blocking(move || {
-                        crypto::verify_passphrase(&passphrase_c, &hash)
-                    })
-                    .await
-                    .expect("passphrase verify task panicked");
-                    (passphrase, valid)
-                },
-                |(passphrase, valid)| Message::UnlockPassphraseResult { passphrase, valid },
-            );
-            Some(task)
-        }
-        Message::UnlockPassphraseResult { passphrase, valid } => {
-            if !valid {
-                if let Some(AuthDialog::Unlock {
-                    error,
-                    is_processing,
-                    ..
-                }) = &mut state.active_dialog
-                {
-                    *error = Some("Incorrect passphrase".to_owned());
-                    *is_processing = false;
-                }
-                return Some(Task::none());
-            }
-            state.unlocked_passphrase = Some(SecretString::new(passphrase.clone()));
-            let pending = match state.active_dialog.take() {
-                Some(AuthDialog::Unlock { pending_action, .. }) => pending_action,
-                _ => return Some(Task::none()),
-            };
-            match pending {
-                PendingAction::ConnectToProfile(id) => {
-                    let Some(profile) = state.profiles.get(id) else {
-                        return Some(Task::none());
-                    };
-                    let creds = profile.credentials(Some(passphrase.as_str()));
-                    Some(Task::done(Message::Connection(
-                        connection::Message::ConnectWithCreds {
-                            profile_id: id,
-                            creds,
-                        },
-                    )))
-                }
-                PendingAction::SavePassword {
-                    profile_id,
-                    password,
-                } => {
-                    let pw = passphrase.clone();
-                    let task = Task::perform(
-                        async move {
-                            let encrypted = tokio::task::spawn_blocking(move || {
-                                crypto::encrypt_password(&pw, &password)
-                            })
-                            .await
-                            .expect("encrypt task panicked");
-                            (profile_id, encrypted)
-                        },
-                        |(pid, ep)| Message::EncryptPasswordReady {
-                            profile_id: pid,
-                            encrypted_password: ep,
-                        },
-                    );
-                    Some(task)
-                }
-                PendingAction::TestConnectionFromSettings { profile_id } => {
-                    let Some(profile) = state.profiles.get(profile_id) else {
-                        return Some(Task::none());
-                    };
-                    let creds = profile.credentials(Some(passphrase.as_str()));
-                    let url = creds.rpc_url();
-                    let probe = Task::perform(
-                        async move {
-                            crate::rpc::session_get(&url, &creds, "")
-                                .await
-                                .map_err(|e| e.to_string())
-                        },
-                        |r| {
-                            Message::Settings(
-                                crate::screens::settings::Message::TestConnectionResult(r),
-                            )
-                        },
-                    );
-                    Some(probe)
-                }
-            }
-        }
-        Message::EncryptPasswordReady {
-            profile_id,
-            encrypted_password,
-        } => {
-            if let Some(p) = state
-                .profiles
-                .profiles
-                .iter_mut()
-                .find(|p| p.id == *profile_id)
-            {
-                p.encrypted_password = Some(encrypted_password.clone());
-            }
-            let snap = state.profiles.clone();
-            Some(Task::perform(async move { snap.save().await }, |_| {
-                Message::Noop
-            }))
-        }
-        _ => None,
-    }
-}
-
-// ── View helpers ──────────────────────────────────────────────────────────────
-
-/// Wrap `base` in the active auth dialog modal overlay, or return `base` unchanged.
-pub fn view_overlay<'a>(
-    dialog: Option<&'a AuthDialog>,
-    base: Element<'a, Message>,
-) -> Element<'a, Message> {
-    match dialog {
-        Some(AuthDialog::SetupPassphrase {
-            passphrase_input,
-            confirm_input,
-            error,
-            is_processing,
-            ..
-        }) => stack![
-            base,
-            view_setup_passphrase(
-                passphrase_input,
-                confirm_input,
-                error.as_deref(),
-                *is_processing
-            )
-        ]
-        .into(),
-        Some(AuthDialog::Unlock {
-            passphrase_input,
-            error,
-            is_processing,
-            ..
-        }) => stack![
-            base,
-            view_unlock(passphrase_input, error.as_deref(), *is_processing)
-        ]
-        .into(),
-        None => base,
-    }
-}
-
-fn view_setup_passphrase<'a>(
-    passphrase_input: &'a str,
-    confirm_input: &'a str,
-    error: Option<&'a str>,
-    is_processing: bool,
-) -> Element<'a, Message> {
-    let error_row: Element<'_, Message> = if let Some(err) = error {
-        text(err)
-            .size(13)
-            .style(|t: &iced::Theme| iced::widget::text::Style {
-                color: Some(t.extended_palette().danger.base.color),
-            })
-            .into()
-    } else {
-        Space::new().into()
-    };
-
-    let card = container(
-        column![
-            text("Create master passphrase").size(18),
-            text(
-                "This passphrase protects your saved passwords. \
-                 You will enter it once per app session."
-            )
-            .size(13)
-            .style(|t: &iced::Theme| iced::widget::text::Style {
-                color: Some(t.palette().text.scale_alpha(0.7)),
-            }),
-            text_input("Enter passphrase", passphrase_input)
-                .id(setup_passphrase_id())
-                .on_input_maybe((!is_processing).then_some(Message::AuthSetupPassphraseChanged))
-                .secure(true)
-                .padding([12, 16])
-                .style(crate::theme::m3_text_input),
-            text_input("Confirm passphrase", confirm_input)
-                .id(setup_confirm_id())
-                .on_input_maybe((!is_processing).then_some(Message::AuthSetupConfirmChanged))
-                .secure(true)
-                .padding([12, 16])
-                .style(crate::theme::m3_text_input),
-            error_row,
-            row![
-                button(text("Cancel").size(14))
-                    .on_press_maybe((!is_processing).then_some(Message::DismissAuthDialog))
-                    .padding([10, 20])
-                    .style(crate::theme::m3_tonal_button),
-                Space::new().width(Length::Fill),
-                button(
-                    text(if is_processing {
-                        "Creating…"
-                    } else {
-                        "Create"
-                    })
-                    .size(14)
-                )
-                .on_press_maybe((!is_processing).then_some(Message::SubmitSetupPassphrase))
-                .padding([10, 20])
-                .style(crate::theme::m3_primary_button),
-            ]
-            .width(Length::Fill)
-            .align_y(iced::Alignment::Center),
-        ]
-        .spacing(12),
-    )
-    .padding(28)
-    .max_width(420)
-    .style(|t: &iced::Theme| {
-        let is_dark = t.extended_palette().background.base.color.r < 0.5;
-        iced::widget::container::Style {
-            background: Some(iced::Background::Color(if is_dark {
-                crate::theme::CARD_SURFACE_DARK
-            } else {
-                crate::theme::CARD_SURFACE_LIGHT
-            })),
-            border: iced::Border {
-                radius: 12.0.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    });
-
-    container(card)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .style(|_: &iced::Theme| iced::widget::container::Style {
-            background: Some(iced::Background::Color(iced::Color {
-                r: 0.0,
-                g: 0.0,
-                b: 0.0,
-                a: 0.5,
-            })),
-            ..Default::default()
-        })
-        .into()
-}
-
-fn view_unlock<'a>(
-    passphrase_input: &'a str,
-    error: Option<&'a str>,
-    is_processing: bool,
-) -> Element<'a, Message> {
-    let error_row: Element<'_, Message> = if let Some(err) = error {
-        text(err)
-            .size(13)
-            .style(|t: &iced::Theme| iced::widget::text::Style {
-                color: Some(t.extended_palette().danger.base.color),
-            })
-            .into()
-    } else {
-        Space::new().into()
-    };
-
-    let card = container(
-        column![
-            text("Enter master passphrase").size(18),
-            text("Enter your master passphrase to unlock your saved credentials.")
-                .size(13)
-                .style(|t: &iced::Theme| iced::widget::text::Style {
-                    color: Some(t.palette().text.scale_alpha(0.7)),
-                }),
-            text_input("Master passphrase", passphrase_input)
-                .id(unlock_input_id())
-                .on_input_maybe((!is_processing).then_some(Message::AuthUnlockPassphraseChanged))
-                .secure(true)
-                .padding([12, 16])
-                .style(crate::theme::m3_text_input),
-            error_row,
-            row![
-                button(text("Cancel").size(14))
-                    .on_press_maybe((!is_processing).then_some(Message::DismissAuthDialog))
-                    .padding([10, 20])
-                    .style(crate::theme::m3_tonal_button),
-                Space::new().width(Length::Fill),
-                button(
-                    text(if is_processing {
-                        "Verifying…"
-                    } else {
-                        "Unlock"
-                    })
-                    .size(14)
-                )
-                .on_press_maybe((!is_processing).then_some(Message::SubmitUnlockPassphrase))
-                .padding([10, 20])
-                .style(crate::theme::m3_primary_button),
-            ]
-            .width(Length::Fill)
-            .align_y(iced::Alignment::Center),
-        ]
-        .spacing(12),
-    )
-    .padding(28)
-    .max_width(420)
-    .style(|t: &iced::Theme| {
-        let is_dark = t.extended_palette().background.base.color.r < 0.5;
-        iced::widget::container::Style {
-            background: Some(iced::Background::Color(if is_dark {
-                crate::theme::CARD_SURFACE_DARK
-            } else {
-                crate::theme::CARD_SURFACE_LIGHT
-            })),
-            border: iced::Border {
-                radius: 12.0.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    });
-
-    container(card)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .style(|_: &iced::Theme| iced::widget::container::Style {
-            background: Some(iced::Background::Color(iced::Color {
-                r: 0.0,
-                g: 0.0,
-                b: 0.0,
-                a: 0.5,
-            })),
-            ..Default::default()
-        })
-        .into()
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -623,7 +113,7 @@ mod tests {
     fn dismiss_clears_setup_dialog() {
         let mut state = make_state();
         state.active_dialog = Some(setup_dialog(Uuid::new_v4()));
-        let result = handle_message(&mut state, &Message::DismissAuthDialog);
+        let result = handle_message(&mut state, &crate::app::Message::DismissAuthDialog);
         assert!(result.is_some(), "message should be consumed");
         assert!(state.active_dialog.is_none());
     }
@@ -632,14 +122,14 @@ mod tests {
     fn dismiss_clears_unlock_dialog() {
         let mut state = make_state();
         state.active_dialog = Some(unlock_dialog());
-        handle_message(&mut state, &Message::DismissAuthDialog);
+        handle_message(&mut state, &crate::app::Message::DismissAuthDialog);
         assert!(state.active_dialog.is_none());
     }
 
     #[test]
     fn dismiss_when_no_dialog_still_consumed() {
         let mut state = make_state();
-        let result = handle_message(&mut state, &Message::DismissAuthDialog);
+        let result = handle_message(&mut state, &crate::app::Message::DismissAuthDialog);
         assert!(result.is_some(), "DismissAuthDialog is always consumed");
     }
 
@@ -651,7 +141,7 @@ mod tests {
         state.active_dialog = Some(setup_dialog(Uuid::new_v4()));
         handle_message(
             &mut state,
-            &Message::AuthSetupPassphraseChanged("abc".to_owned()),
+            &crate::app::Message::AuthSetupPassphraseChanged("abc".to_owned()),
         );
         let Some(AuthDialog::SetupPassphrase {
             passphrase_input, ..
@@ -675,7 +165,7 @@ mod tests {
         });
         handle_message(
             &mut state,
-            &Message::AuthSetupPassphraseChanged("new".to_owned()),
+            &crate::app::Message::AuthSetupPassphraseChanged("new".to_owned()),
         );
         let Some(AuthDialog::SetupPassphrase { error, .. }) = &state.active_dialog else {
             panic!();
@@ -691,7 +181,7 @@ mod tests {
         state.active_dialog = Some(setup_dialog(Uuid::new_v4()));
         handle_message(
             &mut state,
-            &Message::AuthSetupConfirmChanged("xyz".to_owned()),
+            &crate::app::Message::AuthSetupConfirmChanged("xyz".to_owned()),
         );
         let Some(AuthDialog::SetupPassphrase { confirm_input, .. }) = &state.active_dialog else {
             panic!();
@@ -712,7 +202,7 @@ mod tests {
         });
         handle_message(
             &mut state,
-            &Message::AuthSetupConfirmChanged("x".to_owned()),
+            &crate::app::Message::AuthSetupConfirmChanged("x".to_owned()),
         );
         let Some(AuthDialog::SetupPassphrase { error, .. }) = &state.active_dialog else {
             panic!();
@@ -728,7 +218,7 @@ mod tests {
         state.active_dialog = Some(unlock_dialog());
         handle_message(
             &mut state,
-            &Message::AuthUnlockPassphraseChanged("secret".to_owned()),
+            &crate::app::Message::AuthUnlockPassphraseChanged("secret".to_owned()),
         );
         let Some(AuthDialog::Unlock {
             passphrase_input, ..
@@ -750,7 +240,7 @@ mod tests {
         });
         handle_message(
             &mut state,
-            &Message::AuthUnlockPassphraseChanged("x".to_owned()),
+            &crate::app::Message::AuthUnlockPassphraseChanged("x".to_owned()),
         );
         let Some(AuthDialog::Unlock { error, .. }) = &state.active_dialog else {
             panic!();
@@ -771,7 +261,7 @@ mod tests {
             error: None,
             is_processing: false,
         });
-        handle_message(&mut state, &Message::SubmitSetupPassphrase);
+        handle_message(&mut state, &crate::app::Message::SubmitSetupPassphrase);
         let Some(AuthDialog::SetupPassphrase { error, .. }) = &state.active_dialog else {
             panic!();
         };
@@ -789,7 +279,7 @@ mod tests {
             error: None,
             is_processing: false,
         });
-        handle_message(&mut state, &Message::SubmitSetupPassphrase);
+        handle_message(&mut state, &crate::app::Message::SubmitSetupPassphrase);
         let Some(AuthDialog::SetupPassphrase { error, .. }) = &state.active_dialog else {
             panic!();
         };
@@ -807,7 +297,7 @@ mod tests {
             error: None,
             is_processing: false,
         });
-        let result = handle_message(&mut state, &Message::SubmitSetupPassphrase);
+        let result = handle_message(&mut state, &crate::app::Message::SubmitSetupPassphrase);
         assert!(result.is_some(), "should return an async task");
         // Dialog not yet cleared — cleared only on SetupPassphraseComplete.
         assert!(state.active_dialog.is_some());
@@ -819,7 +309,7 @@ mod tests {
     fn submit_unlock_empty_passphrase_sets_error() {
         let mut state = make_state();
         state.active_dialog = Some(unlock_dialog());
-        handle_message(&mut state, &Message::SubmitUnlockPassphrase);
+        handle_message(&mut state, &crate::app::Message::SubmitUnlockPassphrase);
         let Some(AuthDialog::Unlock { error, .. }) = &state.active_dialog else {
             panic!();
         };
@@ -836,7 +326,7 @@ mod tests {
             error: None,
             is_processing: false,
         });
-        let result = handle_message(&mut state, &Message::SubmitUnlockPassphrase);
+        let result = handle_message(&mut state, &crate::app::Message::SubmitUnlockPassphrase);
         assert!(result.is_some(), "should dispatch async verify task");
     }
 
@@ -848,7 +338,7 @@ mod tests {
         state.active_dialog = Some(unlock_dialog());
         handle_message(
             &mut state,
-            &Message::UnlockPassphraseResult {
+            &crate::app::Message::UnlockPassphraseResult {
                 passphrase: "wrong".to_owned(),
                 valid: false,
             },
@@ -865,7 +355,7 @@ mod tests {
         state.active_dialog = Some(unlock_dialog());
         handle_message(
             &mut state,
-            &Message::UnlockPassphraseResult {
+            &crate::app::Message::UnlockPassphraseResult {
                 passphrase: "correct".to_owned(),
                 valid: true,
             },
@@ -910,7 +400,7 @@ mod tests {
 
         let result = handle_message(
             &mut state,
-            &Message::SetupPassphraseComplete {
+            &crate::app::Message::SetupPassphraseComplete {
                 passphrase: "my_passphrase".to_owned(),
                 hash: "$argon2id$fakehash".to_owned(),
                 profile_id,
@@ -970,7 +460,7 @@ mod tests {
 
         handle_message(
             &mut state,
-            &Message::EncryptPasswordReady {
+            &crate::app::Message::EncryptPasswordReady {
                 profile_id,
                 encrypted_password: "salt$nonce$ct".to_owned(),
             },
@@ -991,7 +481,7 @@ mod tests {
         // No profiles — should not panic.
         let result = handle_message(
             &mut state,
-            &Message::EncryptPasswordReady {
+            &crate::app::Message::EncryptPasswordReady {
                 profile_id: Uuid::new_v4(),
                 encrypted_password: "x$y$z".to_owned(),
             },
@@ -1004,7 +494,7 @@ mod tests {
     #[test]
     fn non_auth_message_returns_none() {
         let mut state = make_state();
-        let result = handle_message(&mut state, &Message::Noop);
+        let result = handle_message(&mut state, &crate::app::Message::Noop);
         assert!(result.is_none(), "non-auth messages must not be consumed");
     }
 
@@ -1014,7 +504,10 @@ mod tests {
     #[test]
     fn auth_tab_not_consumed_when_no_dialog() {
         let mut state = make_state();
-        let result = handle_message(&mut state, &Message::AuthTabKeyPressed { shift: false });
+        let result = handle_message(
+            &mut state,
+            &crate::app::Message::AuthTabKeyPressed { shift: false },
+        );
         assert!(result.is_none(), "no dialog → message must not be consumed");
     }
 
@@ -1023,7 +516,10 @@ mod tests {
     fn auth_tab_noop_in_unlock_dialog() {
         let mut state = make_state();
         state.active_dialog = Some(unlock_dialog());
-        let result = handle_message(&mut state, &Message::AuthTabKeyPressed { shift: false });
+        let result = handle_message(
+            &mut state,
+            &crate::app::Message::AuthTabKeyPressed { shift: false },
+        );
         assert!(result.is_some(), "Unlock → must be consumed");
         // Dialog itself must be untouched.
         assert!(
@@ -1037,7 +533,10 @@ mod tests {
     fn auth_shift_tab_noop_in_unlock_dialog() {
         let mut state = make_state();
         state.active_dialog = Some(unlock_dialog());
-        let result = handle_message(&mut state, &Message::AuthTabKeyPressed { shift: true });
+        let result = handle_message(
+            &mut state,
+            &crate::app::Message::AuthTabKeyPressed { shift: true },
+        );
         assert!(result.is_some());
     }
 
@@ -1046,7 +545,10 @@ mod tests {
     fn auth_tab_active_in_setup_dialog() {
         let mut state = make_state();
         state.active_dialog = Some(setup_dialog(Uuid::new_v4()));
-        let result = handle_message(&mut state, &Message::AuthTabKeyPressed { shift: false });
+        let result = handle_message(
+            &mut state,
+            &crate::app::Message::AuthTabKeyPressed { shift: false },
+        );
         assert!(result.is_some(), "Setup → must be consumed");
         // Dialog must still be open.
         assert!(
@@ -1063,7 +565,10 @@ mod tests {
     fn auth_shift_tab_active_in_setup_dialog() {
         let mut state = make_state();
         state.active_dialog = Some(setup_dialog(Uuid::new_v4()));
-        let result = handle_message(&mut state, &Message::AuthTabKeyPressed { shift: true });
+        let result = handle_message(
+            &mut state,
+            &crate::app::Message::AuthTabKeyPressed { shift: true },
+        );
         assert!(result.is_some());
     }
 
@@ -1073,7 +578,7 @@ mod tests {
     #[test]
     fn auth_enter_not_consumed_when_no_dialog() {
         let mut state = make_state();
-        let result = handle_message(&mut state, &Message::AuthEnterPressed);
+        let result = handle_message(&mut state, &crate::app::Message::AuthEnterPressed);
         assert!(result.is_none());
     }
 
@@ -1082,7 +587,7 @@ mod tests {
     fn auth_enter_dispatches_unlock_submit_when_ready() {
         let mut state = make_state();
         state.active_dialog = Some(unlock_dialog());
-        let result = handle_message(&mut state, &Message::AuthEnterPressed);
+        let result = handle_message(&mut state, &crate::app::Message::AuthEnterPressed);
         assert!(result.is_some(), "must be consumed");
         // Not yet processing — the submit task is returned, no state mutation yet.
         assert!(
@@ -1107,7 +612,7 @@ mod tests {
             error: None,
             is_processing: true,
         });
-        let result = handle_message(&mut state, &Message::AuthEnterPressed);
+        let result = handle_message(&mut state, &crate::app::Message::AuthEnterPressed);
         assert!(result.is_some(), "still consumed");
         assert!(
             matches!(
@@ -1126,7 +631,7 @@ mod tests {
     fn auth_enter_dispatches_setup_submit_when_ready() {
         let mut state = make_state();
         state.active_dialog = Some(setup_dialog(Uuid::new_v4()));
-        let result = handle_message(&mut state, &Message::AuthEnterPressed);
+        let result = handle_message(&mut state, &crate::app::Message::AuthEnterPressed);
         assert!(result.is_some());
         assert!(
             matches!(
@@ -1149,7 +654,7 @@ mod tests {
             error: None,
             is_processing: true,
         });
-        let result = handle_message(&mut state, &Message::AuthEnterPressed);
+        let result = handle_message(&mut state, &crate::app::Message::AuthEnterPressed);
         assert!(result.is_some());
         assert!(
             matches!(

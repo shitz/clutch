@@ -3,7 +3,9 @@
 ## Purpose
 
 TBD - created by archiving change add-torrents. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Add Torrent toolbar entry points
 
 The main-screen toolbar SHALL provide two buttons: **Add Torrent** and **Add Link**. These are
@@ -197,7 +199,7 @@ in the `torrent-add` RPC call so the daemon never starts downloading those files
 ### Requirement: Select All tri-state header in file add dialog
 
 The file add dialog SHALL display a **tri-state checkbox** header row above the file list,
-using the `m3_tristate_checkbox` helper from `src/theme.rs`. Its state SHALL be derived
+using the `m3_tristate_checkbox` helper from the public `crate::theme` module. Its state SHALL be derived
 from the `selected: Vec<bool>` state:
 
 - All selected \u2192 **Checked**
@@ -231,4 +233,3 @@ Checked emits `AddDialogDeselectAll`.
 
 - **WHEN** the header is Checked and the user clicks it
 - **THEN** all file checkboxes are set to unchecked
-

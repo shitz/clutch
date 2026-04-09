@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Settings screen state and state-local helper methods.
+
 use uuid::Uuid;
 
 use crate::profile::{ConnectionProfile, GeneralSettings, ProfileStore, ThemeConfig};
@@ -27,6 +29,7 @@ pub enum PendingNavigation {
     Close,
 }
 
+/// State for the full-screen settings editor.
 #[derive(Debug)]
 pub struct SettingsScreen {
     // ── Tab ──────────────────────────────────────────────────────────────────
@@ -59,6 +62,7 @@ pub struct SettingsScreen {
 }
 
 impl SettingsScreen {
+    /// Construct the settings screen from the current persisted profile store.
     pub fn new(
         store: &ProfileStore,
         active_profile_id: Option<Uuid>,
@@ -84,6 +88,7 @@ impl SettingsScreen {
         }
     }
 
+    /// Build a store snapshot from the current settings drafts.
     pub fn build_store_snapshot(&self) -> ProfileStore {
         ProfileStore {
             last_connected: None,
@@ -100,6 +105,7 @@ impl SettingsScreen {
         }
     }
 
+    /// Validate the refresh-interval draft and store any user-facing error message.
     pub fn validate_refresh_interval(&mut self) {
         match self.refresh_interval_draft.parse::<u8>() {
             Ok(v) if (1..=30).contains(&v) => self.general_validation_error = None,
@@ -114,6 +120,7 @@ impl SettingsScreen {
         }
     }
 
+    /// Return whether the current profile draft can be saved.
     pub fn draft_is_saveable(&self) -> bool {
         let Some(d) = &self.draft else {
             return false;
@@ -121,6 +128,7 @@ impl SettingsScreen {
         !d.name.is_empty() && d.port.parse::<u16>().is_ok()
     }
 
+    /// Apply a deferred navigation action after the discard guard is resolved.
     pub fn execute_pending_nav(&mut self, nav: PendingNavigation) {
         match nav {
             PendingNavigation::SwitchTab(tab) => {

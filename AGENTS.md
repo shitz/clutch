@@ -63,10 +63,11 @@ Never create a new file without this header.
 
 ---
 
-## Theme & UI Elements (`src/theme.rs`)
+## Theme & UI Elements (`crate::theme`)
 
-All visual styling lives in `src/theme.rs`. Import only from there — never hard-code
-colors, fonts, or sizes inline.
+All visual styling lives in the public `crate::theme` module, implemented by
+`src/theme.rs` plus private `src/theme/*` helpers. Import only from `crate::theme`
+— never hard-code colors, fonts, or sizes inline.
 
 ### When to use each helper
 
@@ -112,18 +113,20 @@ Do **not** keep a separate `bool` flag for this purpose.
 ```text
 src/
 ├── main.rs          # Entry point only — window setup, font registration, tracing init
-├── app.rs           # AppState, Screen router, top-level update/view/subscription
+├── app.rs           # AppState, Screen router, top-level facade for update/view/subscription
+├── app/             # Private routing, settings-bridge, and keyboard helpers backing crate::app
 ├── rpc/             # Transmission RPC: api, models, transport, worker (serialized queue)
 ├── screens/
 │   ├── connection.rs        # Profile selection / quick-connect
 │   ├── main_screen.rs       # Root layout: torrent list + inspector split
-│   ├── inspector.rs         # Detail inspector panel
-│   └── torrent_list/        # List, sort, add-torrent dialog (split into view/update/worker)
+│   ├── inspector/           # Detail inspector panel (state / update / view)
+│   ├── torrent_list/        # List screen: view orchestration, toolbar/header/dialog helpers, sort, add-torrent, update, worker
 │   └── settings/            # Profile editing (split into state/draft/update/view)
-├── auth.rs          # Passphrase setup and unlock flows
+├── auth/            # Passphrase setup and unlock flows (mod / update / view)
 ├── crypto.rs        # Argon2id KDF + ChaCha20-Poly1305 AEAD
 ├── profile.rs       # TOML config persistence
-├── theme.rs         # All styling (colors, fonts, widget helpers)
+├── theme.rs         # Public theme facade (colors, fonts, widget helpers)
+├── theme/           # Private theme submodules backing crate::theme
 └── format.rs        # Human-readable formatting (sizes, speeds, ETA)
 ```
 
@@ -137,16 +140,18 @@ When adding a new screen:
 
 ## Commit Messages
 
-Follow the Go commit style with a component prefix:
+Follow the [Conventional Commits](https://www.conventionalcommits.org/) specification for commit
+messages:
 
 ```text
-component: short imperative summary
+<type>(<scope>): short imperative summary
 
 Optional body explaining *why*, not *what* (the diff shows that).
 ```
 
-Component examples: `clutch/theme`, `clutch/rpc`, `clutch/torrent-list`, `clutch/settings`,
-`clutch/ci`, `clutch/packaging`.
+Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`. Scope is optional but
+encouraged for larger projects; use the name of the module or feature being changed (e.g.
+`torrent-list`, `rpc`, `theme`).
 
 ---
 
@@ -182,8 +187,29 @@ Component examples: `clutch/theme`, `clutch/rpc`, `clutch/torrent-list`, `clutch
 
 Keep the system_architecture.md and README.md up to date with any architectural changes or new
 features. The README should be a user-friendly overview, while system_architecture.md can go into
-technical depth for future maintainers. Change logs must be recorded in CHANGELOG.md following the
-[Keep a Changelog format](https://keepachangelog.com/en/1.0.0/).
+technical depth for future maintainers.
+
+## Changelog
+
+Change logs must be recorded in CHANGELOG.md following the [Keep a Changelog
+format](https://keepachangelog.com/en/1.0.0/).
+
+### Guiding Principles
+
+- Changelog are for humans, not machines.
+- There should be an entry for every single version.
+- The same types of changes should be grouped.
+- The latest version comes first.
+- The release date of each version is displayed.
+
+### Types of changes
+
+- `Added` for new features.
+- `Changed` for changes in existing functionality.
+- `Deprecated` for soon-to-be removed features.
+- `Removed` for now removed features.
+- `Fixed` for any bug fixes.
+- `Security` for vulnerabilities.
 
 ## Markdown formatting
 

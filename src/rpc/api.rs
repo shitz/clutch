@@ -939,7 +939,7 @@ mod tests {
 
     // ── torrent_set_file_wanted ───────────────────────────────────────────────
 
-    /// 5.1 – `torrent_set_file_wanted` with `wanted = true` sends `"files-wanted"`.
+    /// `torrent_set_file_wanted` with `wanted = true` sends `"files-wanted"`.
     #[tokio::test]
     async fn torrent_set_file_wanted_sends_files_wanted_field() {
         let server = MockServer::start().await;
@@ -971,7 +971,7 @@ mod tests {
         );
     }
 
-    /// 5.2 – `torrent_set_file_wanted` with `wanted = false` sends `"files-unwanted"`.
+    /// `torrent_set_file_wanted` with `wanted = false` sends `"files-unwanted"`.
     #[tokio::test]
     async fn torrent_set_file_wanted_sends_files_unwanted_field() {
         let server = MockServer::start().await;
@@ -1003,7 +1003,7 @@ mod tests {
         );
     }
 
-    /// 5.3 – `torrent_add` with `files_unwanted` populated includes the array in the body.
+    /// `torrent_add` includes `files_unwanted` in the request body when provided.
     #[tokio::test]
     async fn torrent_add_includes_files_unwanted_in_body() {
         let server = MockServer::start().await;

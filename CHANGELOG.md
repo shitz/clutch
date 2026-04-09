@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Refactored some large monolithic modules into smaller submodules for better organization and
+  maintainability.
+- Eliminated per-torrent heap allocation from the render hot path.
+
 ## [0.12.0] - 2026-04-08
 
 ### Added

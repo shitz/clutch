@@ -14,8 +14,11 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+//! Desktop application entry point.
+
 use clutch::{app, theme};
 
+/// Configure the window, register fonts, and run the iced application.
 fn main() -> iced::Result {
     tracing_subscriber::fmt::init();
 

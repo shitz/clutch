@@ -133,14 +133,14 @@ mod tests {
         ]
     }
 
-    /// 10.1 – Empty list returns empty vec for any sort.
+    /// Empty list returns an empty vec for any sort.
     #[test]
     fn sort_empty_list() {
         let torrents: Vec<TorrentData> = vec![];
         assert!(sort_torrents(&torrents, SortColumn::Name, SortDir::Asc).is_empty());
     }
 
-    /// 10.2 – Single-element list is a no-op.
+    /// Single-element list is a no-op.
     #[test]
     fn sort_single_element() {
         let torrents = vec![make_torrent(1, "only")];
@@ -149,7 +149,7 @@ mod tests {
         assert_eq!(result[0].id, 1);
     }
 
-    /// 10.3 – Ascending sort by Name.
+    /// Ascending sort by name.
     #[test]
     fn sort_by_name_asc() {
         let list = make_list();
@@ -158,7 +158,7 @@ mod tests {
         assert_eq!(names, ["alpha", "bravo", "charlie"]);
     }
 
-    /// 10.4 – Descending sort by Name.
+    /// Descending sort by name.
     #[test]
     fn sort_by_name_desc() {
         let list = make_list();
@@ -167,7 +167,7 @@ mod tests {
         assert_eq!(names, ["charlie", "bravo", "alpha"]);
     }
 
-    /// 10.5 – Ascending sort by Status.
+    /// Ascending sort by status.
     #[test]
     fn sort_by_status_asc() {
         let list = make_list();
@@ -177,7 +177,7 @@ mod tests {
         assert_eq!(ids, [2, 3, 1]);
     }
 
-    /// 10.6 – Ascending sort by Size.
+    /// Ascending sort by size.
     #[test]
     fn sort_by_size_asc() {
         let list = make_list();
@@ -186,7 +186,7 @@ mod tests {
         assert_eq!(ids, [2, 3, 1]);
     }
 
-    /// 10.7 – Ascending sort by SpeedDown.
+    /// Ascending sort by download speed.
     #[test]
     fn sort_by_speed_down_asc() {
         let list = make_list();
@@ -195,7 +195,7 @@ mod tests {
         assert_eq!(ids, [2, 3, 1]);
     }
 
-    /// 10.8 – Ascending sort by SpeedUp.
+    /// Ascending sort by upload speed.
     #[test]
     fn sort_by_speed_up_asc() {
         let list = make_list();
@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(ids, [2, 3, 1]);
     }
 
-    /// 10.9 – Ascending sort by ETA.
+    /// Ascending sort by ETA.
     #[test]
     fn sort_by_eta_asc() {
         let list = make_list();
@@ -213,7 +213,7 @@ mod tests {
         assert_eq!(ids, [2, 3, 1]);
     }
 
-    /// 10.10 – Unknown ETA (-1) sorts to end.
+    /// Unknown ETA (-1) sorts to the end.
     #[test]
     fn sort_by_eta_unknown_last() {
         let mut list = make_list();
@@ -222,7 +222,7 @@ mod tests {
         assert_eq!(result.last().unwrap().id, 1);
     }
 
-    /// 10.11 – Ascending sort by Ratio.
+    /// Ascending sort by ratio.
     #[test]
     fn sort_by_ratio_asc() {
         let list = make_list();
@@ -231,7 +231,7 @@ mod tests {
         assert_eq!(ids, [2, 3, 1]);
     }
 
-    /// 10.12 – Ascending sort by Progress.
+    /// Ascending sort by progress.
     #[test]
     fn sort_by_progress_asc() {
         let list = make_list();
@@ -240,7 +240,7 @@ mod tests {
         assert_eq!(ids, [2, 3, 1]);
     }
 
-    /// 10.13 – Descending sort reverses any column (spot-check with Size).
+    /// Descending sort reverses any column (spot-check with size).
     #[test]
     fn sort_by_size_desc() {
         let list = make_list();

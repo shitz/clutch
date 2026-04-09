@@ -2,7 +2,7 @@
 
 ### Requirement: Primary filled button helper
 
-The application SHALL provide an `m3_primary_button` style function in `src/theme.rs`. The style SHALL produce a solid primary-color background with white (on-primary) text and a fully rounded pill shape (radius 100.0). Padding SHALL be at least `[10, 24]`. This style is used for all primary CTAs (Connect, Save, Add).
+The application SHALL provide an `m3_primary_button` style function from the public `crate::theme` module. The style SHALL produce a solid primary-color background with white (on-primary) text and a fully rounded pill shape (radius 100.0). Padding SHALL be at least `[10, 24]`. This style is used for all primary CTAs (Connect, Save, Add).
 
 #### Scenario: Primary button renders with solid brand color
 
@@ -16,7 +16,7 @@ The application SHALL provide an `m3_primary_button` style function in `src/them
 
 ### Requirement: Tonal (secondary) button helper
 
-The application SHALL provide an `m3_tonal_button` style function in `src/theme.rs`. The style SHALL produce a 15 % alpha primary color wash background with primary-color text and a fully rounded pill shape (radius 100.0). This style is used for all secondary/cancel actions (Cancel, Manage Profiles, Test Connection, Undo).
+The application SHALL provide an `m3_tonal_button` style function from the public `crate::theme` module. The style SHALL produce a 15 % alpha primary color wash background with primary-color text and a fully rounded pill shape (radius 100.0). This style is used for all secondary/cancel actions (Cancel, Manage Profiles, Test Connection, Undo).
 
 #### Scenario: Tonal button renders with brand wash background
 

@@ -29,8 +29,8 @@ pub enum Screen {
 ```
 
 **Message Dispatch:** Each screen has its own Message enum. The top-level `app::Message` wraps these
-and routes them to the active screen's `update()` function, handling global intercepts (like opening
-settings or locking the app) at the top level.
+and routes them through `app.rs`, which delegates startup/global flow, settings-result reconciliation,
+and screen-specific keyboard subscriptions to private `src/app/` helpers.
 
 ## The RPC Layer & Data Flow
 
@@ -61,8 +61,11 @@ The torrent list supports multi-select status filtering entirely in-process. A
 
 1. A **count pass** over the full `Vec<TorrentData>` tallies how many torrents belong to
    each of the five semantic buckets (Downloading, Seeding, Paused, Active, Error).
-2. A **filter pass** retains only torrents whose `matching_filters()` set intersects the active
-   `HashSet` before the rows are rendered.
+2. A **filter pass** retains only torrents that match the active `HashSet` before the rows are
+   rendered.
+
+Both passes inline the status-matching logic directly rather than allocating intermediate
+collections, keeping the render hot path allocation-free on the per-torrent level.
 
 No additional RPC calls are needed; the daemon continues to return the full torrent list on every
 poll tick.
@@ -74,15 +77,19 @@ A quick map of where to find things:
 ```text
 src/
 ├── main.rs          # Entry point, window constraints, tracing setup
-├── app.rs           # AppState, Screen router, top-level update/view
+├── app.rs           # AppState, Screen router, top-level facade for update/view
+├── app/             # Private routing, settings bridge, and keyboard helpers
 ├── rpc/             # Transmission API, types, and the serialized worker
 ├── screens/         # Individual screen states and views
-│   ├── connection/  # Profile selection and quick-connect
-│   ├── main_screen/ # The core app: torrent list and detail inspector
-│   └── settings/    # Profile editing and app preferences
-├── auth.rs          # Passphrase setup and unlock dialogs
-├── crypto.rs        # Argon2id / ChaCha20 wrappers
+│   ├── connection.rs        # Profile selection and quick-connect
+│   ├── main_screen.rs       # Root layout: torrent list + inspector split
+│   ├── inspector/           # Detail inspector panel (state / update / view)
+│   ├── torrent_list/        # Torrent list (filters, toolbar, columns, dialogs, sort, add-torrent, update, worker)
+│   └── settings/            # Profile editing (state / draft / update / view)
+├── auth/            # Passphrase setup and unlock flows (update / view)
+├── crypto.rs        # Argon2id / ChaCha20-Poly1305 wrappers
 ├── profile.rs       # TOML storage and runtime configuration
-├── theme.rs         # Material Design 3 palettes and widget styling
+├── theme.rs         # Public Material Design 3 theme facade
+├── theme/           # Private widget/style helpers backing crate::theme
 └── format.rs        # String formatting for ETA, bytes, speeds
 ```

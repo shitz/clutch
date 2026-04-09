@@ -113,7 +113,7 @@ All connection errors SHALL be logged to stdout/stderr in addition to being show
 
 ### Requirement: Saved Profiles and Quick Connect tab navigation
 
-The connection screen SHALL present two modes — Saved Profiles and Quick Connect — as a segmented control component (M3 style) using the `segmented_control` helper from `src/theme.rs`. The segmented control SHALL be centered in a fixed-width (400 px) container.
+The connection screen SHALL present two modes — Saved Profiles and Quick Connect — as a segmented control component (M3 style) using the `segmented_control` helper from the public `crate::theme` module. The segmented control SHALL be centered in a fixed-width (400 px) container.
 
 #### Scenario: Segmented control shown on connection screen
 

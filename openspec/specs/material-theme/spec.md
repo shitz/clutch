@@ -2,7 +2,7 @@
 
 ### Requirement: Material Design 3 theme
 
-The application SHALL support two built-in themes — Light and Dark — both derived from a Material Design 3 palette seeded from the Clutch brand color Magnetic Blue (`#2A64A7`). Each theme SHALL be implemented as a custom `iced::Theme` via a single `clutch_theme(is_dark: bool) -> Theme` function. The dark palette SHALL use a lightened primary (`#5B9FD4`) for sufficient contrast on dark surfaces. The following named color constants SHALL be defined in `src/theme.rs`:
+The application SHALL support two built-in themes — Light and Dark — both derived from a Material Design 3 palette seeded from the Clutch brand color Magnetic Blue (`#2A64A7`). Each theme SHALL be implemented as a custom `iced::Theme` via a single `clutch_theme(is_dark: bool) -> Theme` function. The dark palette SHALL use a lightened primary (`#5B9FD4`) for sufficient contrast on dark surfaces. The following named color constants SHALL be available from the public `crate::theme` module:
 
 - `MAGNETIC_BLUE`: `Color::from_rgb(0.16, 0.39, 0.65)` — base brand blue
 - `MAGNETIC_BLUE_LIGHT`: `Color::from_rgb(0.36, 0.62, 0.83)` — lightened primary for dark mode
@@ -44,7 +44,7 @@ The active theme SHALL apply to all standard iced widgets automatically via the 
 
 #### Scenario: Named constants are the sole source of brand colors
 
-- **WHEN** a developer inspects `src/theme.rs`
+- **WHEN** a developer inspects the public `crate::theme` module
 - **THEN** all brand colors are defined as named `const Color` values at the top of the file and nowhere else
 
 ### Requirement: Material Icons font

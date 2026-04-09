@@ -1,8 +1,11 @@
 # file-selection Specification
 
 ## Purpose
+
 TBD - created by archiving change selective-file-download. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Inspector Files tab shows per-file wanted checkboxes
 
 The inspector Files tab SHALL display a checkbox at the start of each file row. The displayed
@@ -91,7 +94,8 @@ effective wanted values (incorporating `pending_wanted` overrides):
 - No files effectively wanted → **Unchecked**
 - Some but not all files effectively wanted → **Mixed** (indeterminate)
 
-The tri-state checkbox SHALL use the `m3_tristate_checkbox` helper from `src/theme.rs`
+The tri-state checkbox SHALL use the `m3_tristate_checkbox` helper from the public
+`crate::theme` module
 (see Design D5). Clicking the header when Mixed or Unchecked emits
 `AllFilesWantedToggled { wanted: true }`; clicking when Checked emits
 `AllFilesWantedToggled { wanted: false }`.
@@ -129,9 +133,9 @@ and enqueue **exactly one** `RpcWork::SetFileWanted` with the full index range
 
 ### Requirement: CheckState enum and m3_tristate_checkbox theme helper
 
-A `CheckState` enum with variants `Checked`, `Unchecked`, and `Mixed` SHALL be defined in
-`src/theme.rs`. A `m3_tristate_checkbox(state, label, on_toggle)` helper function SHALL
-also live in `src/theme.rs`. It SHALL render a borderless button composed of a Material
+A `CheckState` enum with variants `Checked`, `Unchecked`, and `Mixed` SHALL be exposed from
+the public `crate::theme` module. A `m3_tristate_checkbox(state, label, on_toggle)` helper
+function SHALL also be exposed from `crate::theme`. It SHALL render a borderless button composed of a Material
 Icons glyph and a text label:
 
 | `CheckState` | Icon constant                    | Next state on click |
@@ -142,7 +146,7 @@ Icons glyph and a text label:
 
 The icon SHALL be coloured with `palette.primary.base.color` for `Checked` and `Mixed`
 states, and `palette.background.base.text` for `Unchecked`, using the same dark/light
-detection pattern already used throughout `theme.rs`.
+detection pattern already used throughout the theme module.
 
 #### Scenario: Checked icon renders with primary colour
 
@@ -202,4 +206,3 @@ when absent (e.g. older Transmission versions or incomplete responses).
 
 - **WHEN** `torrent-get` returns `fileStats` without a `wanted` key
 - **THEN** `TorrentFileStats::wanted` defaults to `true`
-

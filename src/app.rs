@@ -31,17 +31,25 @@
 //! is executed by the tokio runtime on a background thread; the result arrives
 //! back as a new `Message`. Violating this invariant will freeze the UI.
 
+//! Split into private helpers:
+//! - [`routing`] — startup flow, global intercepts, and connection bridging
+//! - [`settings_bridge`] — reconciliation of settings results back into `AppState`
+//! - [`keyboard`] — screen-specific keyboard subscriptions
+
+mod keyboard;
+mod routing;
+mod settings_bridge;
+
 use uuid::Uuid;
 
 use iced::{Element, Subscription, Task, Theme};
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
 
-use crate::auth::{AuthDialog, PendingAction};
-use crate::crypto;
+use crate::auth::AuthDialog;
 use crate::profile::{ProfileStore, resolve_theme_config};
 use crate::screens::connection::{self, ConnectionScreen};
 use crate::screens::main_screen::{self, MainScreen};
-use crate::screens::settings::{self, SettingsScreen, SettingsTab};
+use crate::screens::settings::{self, SettingsScreen};
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
@@ -184,218 +192,18 @@ impl AppState {
 
 // ── Elm functions ─────────────────────────────────────────────────────────────
 
-/// If the connected profile has any configured bandwidth or seeding settings, push them
-/// to the daemon via `session-set` on connect. Returns `None` when all values are default.
-fn make_push_bandwidth_task(
-    url: &str,
-    creds: &crate::rpc::TransmissionCredentials,
-    session_id: &str,
-    profile: &crate::profile::ConnectionProfile,
-) -> Option<Task<Message>> {
-    let has_anything = profile.speed_limit_down_enabled
-        || profile.speed_limit_down != 0
-        || profile.speed_limit_up_enabled
-        || profile.speed_limit_up != 0
-        || profile.alt_speed_down != 0
-        || profile.alt_speed_up != 0
-        || profile.ratio_limit_enabled
-        || profile.ratio_limit != 0.0;
-    if !has_anything {
-        return None;
-    }
-    let url = url.to_owned();
-    let creds = creds.clone();
-    let sid = session_id.to_owned();
-    let args = crate::rpc::SessionSetArgs {
-        speed_limit_down_enabled: Some(profile.speed_limit_down_enabled),
-        speed_limit_down: Some(profile.speed_limit_down),
-        speed_limit_up_enabled: Some(profile.speed_limit_up_enabled),
-        speed_limit_up: Some(profile.speed_limit_up),
-        alt_speed_down: if profile.alt_speed_down != 0 {
-            Some(profile.alt_speed_down)
-        } else {
-            None
-        },
-        alt_speed_up: if profile.alt_speed_up != 0 {
-            Some(profile.alt_speed_up)
-        } else {
-            None
-        },
-        seed_ratio_limited: Some(profile.ratio_limit_enabled),
-        seed_ratio_limit: Some(profile.ratio_limit),
-        ..Default::default()
-    };
-    Some(Task::perform(
-        async move { crate::rpc::session_set(&url, &creds, &sid, &args).await },
-        |_| Message::Noop,
-    ))
-}
-
-/// Stash the current main screen (if any) and switch to Settings.
-fn open_settings(state: &mut AppState, tab: SettingsTab) {
-    if let Screen::Main(_) = &state.screen {
-        if let Screen::Main(m) = std::mem::replace(
-            &mut state.screen,
-            Screen::Settings(SettingsScreen::new(
-                &state.profiles,
-                state.active_profile,
-                tab,
-            )),
-        ) {
-            state.stashed_main = Some(m);
-        }
-    } else {
-        state.screen = Screen::Settings(SettingsScreen::new(
-            &state.profiles,
-            state.active_profile,
-            tab,
-        ));
-    }
-}
-
 pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
-    // ── Startup ───────────────────────────────────────────────────────────────
-
     if let Message::Noop = message {
         return Task::none();
     }
 
-    if let Message::ProfilesLoaded(store) = &message {
-        let store = store.clone();
-        state.theme = resolve_theme_config(store.general.theme);
-        state.profiles = store;
-
-        // Only rebuild the connection launchpad when we are still sitting on
-        // the connection screen. If we are already on Main (e.g. a background
-        // save fired ProfilesLoaded after a successful connect) we must not
-        // navigate away.
-        if matches!(state.screen, Screen::Connection(_)) {
-            let conn = ConnectionScreen::new_launchpad(&state.profiles.profiles);
-            let focus = conn.initial_focus_task().map(Message::Connection);
-            state.screen = Screen::Connection(conn);
-            return focus;
-        }
-        return Task::none();
+    if let Some(task) = routing::handle_startup_message(state, &message) {
+        return task;
     }
 
-    if let Message::AutoConnectResult(result) = &message {
-        match result {
-            Ok(info) => {
-                let id = state.profiles.last_connected.expect("set before probe");
-                let profile = state.profiles.get(id).expect("profile must exist");
-                let creds = profile.credentials(
-                    state
-                        .unlocked_passphrase
-                        .as_ref()
-                        .map(|s| s.expose_secret().as_str()),
-                );
-                let sid = info.session_id.clone();
-                let profile_name = profile.name.clone();
-                tracing::info!(profile = %profile_name, "Auto-connect succeeded");
-                state.alt_speed_enabled = info.alt_speed_enabled;
-                // Push the profile's stored bandwidth settings to the daemon.
-                let push_task = make_push_bandwidth_task(&creds.rpc_url(), &creds, &sid, profile);
-                state.screen = Screen::Main(MainScreen::new_with_label(
-                    creds,
-                    sid,
-                    Some(profile_name),
-                    Some(id),
-                    state.profiles.general.refresh_interval,
-                ));
-                if let Some(t) = push_task {
-                    return t;
-                }
-            }
-            Err(err) => {
-                tracing::warn!(error = %err, "Auto-connect failed; showing connection launchpad");
-                let conn = ConnectionScreen::new_launchpad(&state.profiles.profiles);
-                let focus = conn.initial_focus_task().map(Message::Connection);
-                state.screen = Screen::Connection(conn);
-                return focus;
-            }
-        }
-        return Task::none();
+    if let Some(task) = routing::handle_global_message(state, &message) {
+        return task;
     }
-
-    // ── Global intercepts ─────────────────────────────────────────────────────
-
-    match &message {
-        Message::Main(main_screen::Message::Disconnect) => {
-            tracing::info!("Disconnecting; returning to connection launchpad");
-            state.active_profile = None;
-            let conn = ConnectionScreen::new_launchpad(&state.profiles.profiles);
-            let focus = conn.initial_focus_task().map(Message::Connection);
-            state.screen = Screen::Connection(conn);
-            return focus;
-        }
-        Message::Main(main_screen::Message::OpenSettingsClicked) => {
-            open_settings(state, SettingsTab::General);
-            return Task::none();
-        }
-        Message::Main(main_screen::Message::TurtleModeToggled) => {
-            let new_val = !state.alt_speed_enabled;
-            state.alt_speed_enabled = new_val;
-            if let Screen::Main(main) = &state.screen {
-                let params = main.list.params.clone();
-                let args = crate::rpc::SessionSetArgs {
-                    alt_speed_enabled: Some(new_val),
-                    ..Default::default()
-                };
-                return Task::perform(
-                    async move {
-                        crate::rpc::session_set(
-                            &params.url,
-                            &params.credentials,
-                            &params.session_id,
-                            &args,
-                        )
-                        .await
-                    },
-                    |_| Message::Noop,
-                );
-            }
-            return Task::none();
-        }
-        Message::Main(main_screen::Message::SessionDataLoaded(data)) => {
-            state.alt_speed_enabled = data.alt_speed_enabled;
-            return Task::none();
-        }
-        Message::Connection(connection::Message::ManageProfilesClicked) => {
-            open_settings(state, SettingsTab::Connections);
-            return Task::none();
-        }
-        Message::Connection(connection::Message::ConnectProfile(id)) => {
-            let id = *id;
-            let Some(profile) = state.profiles.get(id) else {
-                return Task::none();
-            };
-            // If the profile has an encrypted password and the passphrase is not
-            // yet unlocked, show the unlock dialog before connecting.
-            if profile.encrypted_password.is_some() && state.unlocked_passphrase.is_none() {
-                state.active_dialog = Some(AuthDialog::Unlock {
-                    pending_action: PendingAction::ConnectToProfile(id),
-                    passphrase_input: String::new(),
-                    error: None,
-                    is_processing: false,
-                });
-                return iced::widget::operation::focus(crate::auth::unlock_input_id());
-            }
-            // Passphrase available (or no password required) — build creds and connect.
-            let creds = profile.credentials(
-                state
-                    .unlocked_passphrase
-                    .as_ref()
-                    .map(|s| s.expose_secret().as_str()),
-            );
-            return Task::done(Message::Connection(connection::Message::ConnectWithCreds {
-                profile_id: id,
-                creds,
-            }));
-        }
-        _ => {}
-    }
-
-    // ── Auth dialog messages ──────────────────────────────────────────────────
 
     if let Some(task) = crate::auth::handle_message(state, &message) {
         // Keep the settings screen's cached hash in sync (e.g. after first-time
@@ -406,318 +214,17 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
         return task;
     }
 
-    // ── Per-screen dispatch ───────────────────────────────────────────────────
+    if matches!(&state.screen, Screen::Connection(_)) {
+        return routing::handle_connection_message(state, message);
+    }
 
-    match &mut state.screen {
-        Screen::Connection(conn) => {
-            match message {
-                Message::Connection(msg) => {
-                    let (task, opt_success) = conn.update(msg);
-                    if let Some(success) = opt_success {
-                        state.alt_speed_enabled = success.alt_speed_enabled;
-                        if let Some(id) = success.profile_id {
-                            // Saved profile: persist last_connected.
-                            state.active_profile = Some(id);
-                            state.profiles.last_connected = Some(id);
-                            let profile_name = state.profiles.get(id).map(|p| p.name.clone());
-                            let push_task = state.profiles.get(id).and_then(|p| {
-                                make_push_bandwidth_task(
-                                    &success.creds.rpc_url(),
-                                    &success.creds,
-                                    &success.session_id,
-                                    p,
-                                )
-                            });
-                            let profiles_snap = state.profiles.clone();
-                            let save_task =
-                                Task::perform(async move { profiles_snap.save().await }, |_| {
-                                    Message::Noop
-                                });
-                            state.screen = Screen::Main(MainScreen::new_with_label(
-                                success.creds,
-                                success.session_id,
-                                profile_name,
-                                Some(id),
-                                state.profiles.general.refresh_interval,
-                            ));
-                            tracing::info!(profile_id = %id, "Connected via saved profile");
-                            let base = save_task.chain(task.map(Message::Connection));
-                            return if let Some(t) = push_task {
-                                base.chain(t)
-                            } else {
-                                base
-                            };
-                        } else {
-                            // Ephemeral quick connect: nothing is persisted.
-                            state.active_profile = None;
-                            state.screen = Screen::Main(MainScreen::new_with_label(
-                                success.creds,
-                                success.session_id,
-                                None,
-                                None,
-                                state.profiles.general.refresh_interval,
-                            ));
-                            tracing::info!("Connected via quick connect (ephemeral)");
-                        }
-                    }
-                    task.map(Message::Connection)
-                }
-                _ => Task::none(),
-            }
-        }
+    if matches!(&state.screen, Screen::Settings(_)) {
+        return settings_bridge::handle_message(state, message);
+    }
 
-        Screen::Main(main) => match message {
-            Message::Main(msg) => main.update(msg).map(Message::Main),
-            _ => Task::none(),
-        },
-
-        Screen::Settings(settings) => {
-            match message {
-                Message::Settings(msg) => {
-                    let (task, opt_result) = settings.update(msg);
-                    if let Some(result) = opt_result {
-                        match result {
-                            settings::SettingsResult::GeneralSettingsSaved {
-                                theme_config,
-                                mut store,
-                            } => {
-                                store.adopt_from(&state.profiles);
-                                state.profiles = store;
-                                state.theme = resolve_theme_config(theme_config);
-                                // Propagate new interval to stashed main (if settings were
-                                // opened while main was active).
-                                if let Some(m) = &mut state.stashed_main {
-                                    m.refresh_interval = state.profiles.general.refresh_interval;
-                                }
-                                // Re-save so last_connected is not lost (the settings
-                                // screen's own save omits it).
-                                let snap = state.profiles.clone();
-                                return task.map(Message::Settings).chain(Task::perform(
-                                    async move { snap.save().await },
-                                    |_| Message::Noop,
-                                ));
-                            }
-                            settings::SettingsResult::StoreUpdated(mut store) => {
-                                store.adopt_from(&state.profiles);
-                                state.profiles = store;
-                                // Re-save so last_connected is not lost.
-                                let snap = state.profiles.clone();
-                                return task.map(Message::Settings).chain(Task::perform(
-                                    async move { snap.save().await },
-                                    |_| Message::Noop,
-                                ));
-                            }
-                            settings::SettingsResult::ActiveProfileSaved {
-                                profile_id,
-                                mut store,
-                            } => {
-                                // Re-probe using AutoConnectResult so the main screen
-                                // loads fresh session info with updated credentials.
-                                store.adopt_from(&state.profiles);
-                                store.last_connected = Some(profile_id);
-                                state.profiles = store;
-                                state.active_profile = Some(profile_id);
-                                let profile = state.profiles.get(profile_id).expect("just saved");
-                                let creds = profile.credentials(
-                                    state
-                                        .unlocked_passphrase
-                                        .as_ref()
-                                        .map(|s| s.expose_secret().as_str()),
-                                );
-                                let url = creds.rpc_url();
-                                let probe = Task::perform(
-                                    async move {
-                                        crate::rpc::session_get(&url, &creds, "")
-                                            .await
-                                            .map_err(|e| e.to_string())
-                                    },
-                                    Message::AutoConnectResult,
-                                );
-                                return task.map(Message::Settings).chain(probe);
-                            }
-                            settings::SettingsResult::ActiveProfileBandwidthSaved {
-                                profile_id,
-                                mut store,
-                            } => {
-                                // Only bandwidth/seeding settings changed — no reconnect.
-                                // Just update the store and push new limits to the daemon.
-                                store.adopt_from(&state.profiles);
-                                state.profiles = store;
-                                let push_task = state.profiles.get(profile_id).and_then(|p| {
-                                    state.stashed_main.as_ref().map(|m| {
-                                        make_push_bandwidth_task(
-                                            &m.list.params.url,
-                                            &m.list.params.credentials,
-                                            &m.list.params.session_id,
-                                            p,
-                                        )
-                                    })
-                                });
-                                let snap = state.profiles.clone();
-                                let save = Task::perform(async move { snap.save().await }, |_| {
-                                    Message::Noop
-                                });
-                                let base = task.map(Message::Settings).chain(save);
-                                return if let Some(Some(push)) = push_task {
-                                    base.chain(push)
-                                } else {
-                                    base
-                                };
-                            }
-                            settings::SettingsResult::Closed(mut store) => {
-                                store.adopt_from(&state.profiles);
-                                state.profiles = store;
-                                // Restore the stashed main screen if available —
-                                // this avoids a reconnect/refetch.
-                                if let Some(main) = state.stashed_main.take() {
-                                    state.screen = Screen::Main(main);
-                                    return Task::none();
-                                }
-                                // Fallback: re-open main from active profile.
-                                if let Some(id) = state.active_profile
-                                    && let Some(profile) = state.profiles.get(id)
-                                {
-                                    let creds = profile.credentials(
-                                        state
-                                            .unlocked_passphrase
-                                            .as_ref()
-                                            .map(|s| s.expose_secret().as_str()),
-                                    );
-                                    state.screen = Screen::Main(MainScreen::new_with_label(
-                                        creds,
-                                        String::new(),
-                                        state.profiles.get(id).map(|p| p.name.clone()),
-                                        Some(id),
-                                        state.profiles.general.refresh_interval,
-                                    ));
-                                    return Task::none();
-                                }
-                                state.active_profile = None;
-                                let conn =
-                                    ConnectionScreen::new_launchpad(&state.profiles.profiles);
-                                let focus = conn.initial_focus_task().map(Message::Connection);
-                                state.screen = Screen::Connection(conn);
-                                return focus;
-                            }
-                            settings::SettingsResult::SaveWithPassword {
-                                profile_id,
-                                password,
-                                mut store,
-                            } => {
-                                store.adopt_from(&state.profiles);
-                                state.profiles = store;
-                                match &state.profiles.master_passphrase_hash {
-                                    None => {
-                                        state.active_dialog = Some(AuthDialog::SetupPassphrase {
-                                            pending_profile_id: profile_id,
-                                            pending_password: password,
-                                            passphrase_input: String::new(),
-                                            confirm_input: String::new(),
-                                            error: None,
-                                            is_processing: false,
-                                        });
-                                        return task.map(Message::Settings).chain(
-                                            iced::widget::operation::focus(
-                                                crate::auth::setup_passphrase_id(),
-                                            ),
-                                        );
-                                    }
-                                    Some(_) if state.unlocked_passphrase.is_none() => {
-                                        state.active_dialog = Some(AuthDialog::Unlock {
-                                            pending_action: PendingAction::SavePassword {
-                                                profile_id,
-                                                password,
-                                            },
-                                            passphrase_input: String::new(),
-                                            error: None,
-                                            is_processing: false,
-                                        });
-                                        return task.map(Message::Settings).chain(
-                                            iced::widget::operation::focus(
-                                                crate::auth::unlock_input_id(),
-                                            ),
-                                        );
-                                    }
-                                    Some(_) => {
-                                        // Passphrase already unlocked — encrypt immediately.
-                                        let passphrase = state
-                                            .unlocked_passphrase
-                                            .as_ref()
-                                            .unwrap()
-                                            .expose_secret()
-                                            .to_owned();
-                                        let encrypt_task = Task::perform(
-                                            async move {
-                                                let creds =
-                                                    tokio::task::spawn_blocking(move || {
-                                                        crypto::encrypt_password(
-                                                            &passphrase,
-                                                            &password,
-                                                        )
-                                                    })
-                                                    .await
-                                                    .expect("encrypt task panicked");
-                                                (profile_id, creds)
-                                            },
-                                            |(pid, ep)| Message::EncryptPasswordReady {
-                                                profile_id: pid,
-                                                encrypted_password: ep,
-                                            },
-                                        );
-                                        return task.map(Message::Settings).chain(encrypt_task);
-                                    }
-                                }
-                            }
-                            settings::SettingsResult::TestConnectionWithId { profile_id } => {
-                                // If the passphrase is locked, prompt for it before testing.
-                                if let Some(profile) = state.profiles.get(profile_id)
-                                    && profile.encrypted_password.is_some()
-                                    && state.unlocked_passphrase.is_none()
-                                {
-                                    state.active_dialog = Some(AuthDialog::Unlock {
-                                        pending_action: PendingAction::TestConnectionFromSettings {
-                                            profile_id,
-                                        },
-                                        passphrase_input: String::new(),
-                                        error: None,
-                                        is_processing: false,
-                                    });
-                                    return task.map(Message::Settings).chain(
-                                        iced::widget::operation::focus(
-                                            crate::auth::unlock_input_id(),
-                                        ),
-                                    );
-                                }
-                                // Passphrase available (or no password required).
-                                let passphrase = state
-                                    .unlocked_passphrase
-                                    .as_ref()
-                                    .map(|s| s.expose_secret().as_str());
-                                if let Some(profile) = state.profiles.get(profile_id) {
-                                    let creds = profile.credentials(passphrase);
-                                    let url = creds.rpc_url();
-                                    let probe = Task::perform(
-                                        async move {
-                                            crate::rpc::session_get(&url, &creds, "")
-                                                .await
-                                                .map_err(|e| e.to_string())
-                                        },
-                                        |r| {
-                                            Message::Settings(
-                                                settings::Message::TestConnectionResult(r),
-                                            )
-                                        },
-                                    );
-                                    return task.map(Message::Settings).chain(probe);
-                                }
-                            }
-                        }
-                    }
-                    task.map(Message::Settings)
-                }
-                _ => Task::none(),
-            }
-        }
+    match (&mut state.screen, message) {
+        (Screen::Main(main), Message::Main(msg)) => main.update(msg).map(Message::Main),
+        _ => Task::none(),
     }
 }
 
@@ -735,79 +242,5 @@ pub fn view(state: &AppState) -> Element<'_, Message> {
 
 /// Return active subscriptions.
 pub fn subscription(state: &AppState) -> Subscription<Message> {
-    let dialog_active = state.active_dialog.is_some();
-
-    match &state.screen {
-        Screen::Connection(_) => {
-            iced::keyboard::listen()
-                .with(dialog_active)
-                .filter_map(|(dialog_active, event)| {
-                    use iced::keyboard::{Event, Key, key::Named};
-                    if let Event::KeyPressed { key, modifiers, .. } = event {
-                        match key.as_ref() {
-                            Key::Named(Named::Tab) if dialog_active => {
-                                Some(Message::AuthTabKeyPressed {
-                                    shift: modifiers.shift(),
-                                })
-                            }
-                            Key::Named(Named::Enter)
-                                if dialog_active && !modifiers.control() && !modifiers.alt() =>
-                            {
-                                Some(Message::AuthEnterPressed)
-                            }
-                            Key::Named(Named::Tab) => {
-                                Some(Message::Connection(connection::Message::TabKeyPressed {
-                                    shift: modifiers.shift(),
-                                }))
-                            }
-                            Key::Named(Named::Enter)
-                                if !modifiers.control() && !modifiers.alt() =>
-                            {
-                                Some(Message::Connection(connection::Message::EnterPressed))
-                            }
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    }
-                })
-        }
-
-        Screen::Settings(_) => {
-            iced::keyboard::listen()
-                .with(dialog_active)
-                .filter_map(|(dialog_active, event)| {
-                    use iced::keyboard::{Event, Key, key::Named};
-                    if let Event::KeyPressed { key, modifiers, .. } = event {
-                        match key.as_ref() {
-                            Key::Named(Named::Tab) if dialog_active => {
-                                Some(Message::AuthTabKeyPressed {
-                                    shift: modifiers.shift(),
-                                })
-                            }
-                            Key::Named(Named::Enter)
-                                if dialog_active && !modifiers.control() && !modifiers.alt() =>
-                            {
-                                Some(Message::AuthEnterPressed)
-                            }
-                            Key::Named(Named::Tab) => {
-                                Some(Message::Settings(settings::Message::TabKeyPressed {
-                                    shift: modifiers.shift(),
-                                }))
-                            }
-                            Key::Named(Named::Enter)
-                                if !modifiers.control() && !modifiers.alt() =>
-                            {
-                                Some(Message::Settings(settings::Message::EnterPressed))
-                            }
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    }
-                })
-        }
-
-        Screen::Main(main) => main.subscription().map(Message::Main),
-    }
+    keyboard::subscription(state)
 }
