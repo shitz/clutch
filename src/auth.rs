@@ -462,36 +462,14 @@ fn view_setup_passphrase<'a>(
     )
     .padding(28)
     .max_width(420)
-    .style(|t: &iced::Theme| {
-        let is_dark = t.extended_palette().background.base.color.r < 0.5;
-        iced::widget::container::Style {
-            background: Some(iced::Background::Color(if is_dark {
-                crate::theme::CARD_SURFACE_DARK
-            } else {
-                crate::theme::CARD_SURFACE_LIGHT
-            })),
-            border: iced::Border {
-                radius: 12.0.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    });
+    .style(crate::theme::auth_dialog_card);
 
     container(card)
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
         .center_y(Length::Fill)
-        .style(|_: &iced::Theme| iced::widget::container::Style {
-            background: Some(iced::Background::Color(iced::Color {
-                r: 0.0,
-                g: 0.0,
-                b: 0.0,
-                a: 0.5,
-            })),
-            ..Default::default()
-        })
+        .style(crate::theme::dialog_scrim(0.5))
         .into()
 }
 
@@ -551,36 +529,14 @@ fn view_unlock<'a>(
     )
     .padding(28)
     .max_width(420)
-    .style(|t: &iced::Theme| {
-        let is_dark = t.extended_palette().background.base.color.r < 0.5;
-        iced::widget::container::Style {
-            background: Some(iced::Background::Color(if is_dark {
-                crate::theme::CARD_SURFACE_DARK
-            } else {
-                crate::theme::CARD_SURFACE_LIGHT
-            })),
-            border: iced::Border {
-                radius: 12.0.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    });
+    .style(crate::theme::auth_dialog_card);
 
     container(card)
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
         .center_y(Length::Fill)
-        .style(|_: &iced::Theme| iced::widget::container::Style {
-            background: Some(iced::Background::Color(iced::Color {
-                r: 0.0,
-                g: 0.0,
-                b: 0.0,
-                a: 0.5,
-            })),
-            ..Default::default()
-        })
+        .style(crate::theme::dialog_scrim(0.5))
         .into()
 }
 

@@ -500,24 +500,7 @@ fn view_delete_dialog(name: &str, del_local: bool) -> Element<'_, Message> {
                 button("Confirm Delete")
                     .on_press(Message::DeleteConfirmed)
                     .padding([10, 24])
-                    .style(|t: &iced::Theme, s| {
-                        let p = t.extended_palette();
-                        let bg = match s {
-                            button::Status::Hovered | button::Status::Pressed => {
-                                p.danger.strong.color
-                            }
-                            _ => p.danger.base.color,
-                        };
-                        button::Style {
-                            background: Some(iced::Background::Color(bg)),
-                            text_color: p.danger.base.text,
-                            border: iced::Border {
-                                radius: 100.0.into(),
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        }
-                    }),
+                    .style(crate::theme::danger_pill_button),
             ]
             .spacing(8)
             .width(Length::Fill),
@@ -526,35 +509,14 @@ fn view_delete_dialog(name: &str, del_local: bool) -> Element<'_, Message> {
     )
     .padding(28)
     .max_width(400.0)
-    .style(|t: &iced::Theme| {
-        let p = t.extended_palette();
-        container::Style {
-            background: Some(iced::Background::Color(p.background.base.color)),
-            border: iced::Border {
-                radius: 12.0.into(),
-                width: 1.0,
-                color: p.background.strong.color,
-            },
-            shadow: iced::Shadow {
-                color: iced::Color::from_rgba8(0, 0, 0, 0.35),
-                offset: iced::Vector::new(0.0, 4.0),
-                blur_radius: 16.0,
-            },
-            ..Default::default()
-        }
-    });
+    .style(crate::theme::dialog_card);
 
     container(card)
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
         .center_y(Length::Fill)
-        .style(|_: &iced::Theme| container::Style {
-            background: Some(iced::Background::Color(iced::Color::from_rgba8(
-                0, 0, 0, 0.70,
-            ))),
-            ..Default::default()
-        })
+        .style(crate::theme::dialog_scrim(0.70))
         .into()
 }
 
@@ -597,12 +559,7 @@ fn view_set_location_dialog(dlg: &SetLocationDialog) -> Element<'_, Message> {
         .height(Length::Fill)
         .center_x(Length::Fill)
         .center_y(Length::Fill)
-        .style(|_: &iced::Theme| container::Style {
-            background: Some(iced::Background::Color(iced::Color::from_rgba8(
-                0, 0, 0, 0.70,
-            ))),
-            ..Default::default()
-        })
+        .style(crate::theme::dialog_scrim(0.70))
         .into()
 }
 

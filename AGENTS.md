@@ -63,10 +63,11 @@ Never create a new file without this header.
 
 ---
 
-## Theme & UI Elements (`src/theme.rs`)
+## Theme & UI Elements (`crate::theme`)
 
-All visual styling lives in `src/theme.rs`. Import only from there — never hard-code
-colors, fonts, or sizes inline.
+All visual styling lives in the public `crate::theme` module, implemented by
+`src/theme.rs` plus private `src/theme/*` helpers. Import only from `crate::theme`
+— never hard-code colors, fonts, or sizes inline.
 
 ### When to use each helper
 
@@ -123,7 +124,8 @@ src/
 ├── auth.rs          # Passphrase setup and unlock flows
 ├── crypto.rs        # Argon2id KDF + ChaCha20-Poly1305 AEAD
 ├── profile.rs       # TOML config persistence
-├── theme.rs         # All styling (colors, fonts, widget helpers)
+├── theme.rs         # Public theme facade (colors, fonts, widget helpers)
+├── theme/           # Private theme submodules backing crate::theme
 └── format.rs        # Human-readable formatting (sizes, speeds, ETA)
 ```
 

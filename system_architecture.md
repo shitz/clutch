@@ -83,6 +83,7 @@ src/
 ├── auth.rs          # Passphrase setup and unlock dialogs
 ├── crypto.rs        # Argon2id / ChaCha20 wrappers
 ├── profile.rs       # TOML storage and runtime configuration
-├── theme.rs         # Material Design 3 palettes and widget styling
+├── theme.rs         # Public Material Design 3 theme facade
+├── theme/           # Private widget/style helpers backing crate::theme
 └── format.rs        # String formatting for ETA, bytes, speeds
 ```

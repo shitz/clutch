@@ -485,7 +485,7 @@ impl MainScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rpc::{RpcWork, TorrentBandwidthArgs, TorrentData};
+    use crate::rpc::{RpcWork, TorrentData};
     use crate::screens::inspector::ActiveTab;
     use crate::screens::torrent_list::Message as TLMsg;
     use tokio::sync::mpsc;

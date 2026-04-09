@@ -211,12 +211,7 @@ pub fn view_add_dialog(state: &AddDialogState) -> Element<'_, Message> {
     });
 
     container(dialog)
-        .style(|_theme: &iced::Theme| container::Style {
-            background: Some(iced::Background::Color(iced::Color::from_rgba(
-                0.0, 0.0, 0.0, 0.45,
-            ))),
-            ..Default::default()
-        })
+        .style(crate::theme::dialog_scrim(0.45))
         .width(Length::Fill)
         .height(Length::Fill)
         .center(Length::Fill)

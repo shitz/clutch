@@ -3,7 +3,9 @@
 Provide a safe, async Transmission JSON-RPC client that serializes all daemon
 calls through a single MPSC worker, guaranteeing at most one in-flight HTTP
 connection at any time while remaining fully non-blocking on the iced UI thread.
+
 ## Requirements
+
 ### Requirement: Session-Id lifecycle handling
 
 The RPC client SHALL implement the Transmission `X-Transmission-Session-Id` handshake. On receiving a 409 response, the client SHALL extract the new session ID from the response header and retry the request exactly once with the updated ID.
@@ -267,4 +269,3 @@ The `torrent-get` fields list SHALL include `"error"`, `"errorString"`, and `"do
 
 - **WHEN** the daemon omits `"error"` and `"errorString"` fields
 - **THEN** `TorrentData::error == 0` and `TorrentData::error_string` is empty
-
