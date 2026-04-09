@@ -29,6 +29,8 @@ JSON-RPC API.
   torrent for download.
 - **Bandwidth Control** — Toggle global alternative speed limits (Turtle Mode) from the toolbar, or
   set strict per-torrent download, upload, and seeding ratio caps.
+- **Bulk Actions** — Select multiple torrents to start, pause, delete, or edit options across the
+  entire selection simultaneously.
 - **Multiple Connection Profiles** — Save and switch between different remote Transmission instances
   seamlessly.
 - **Secure Storage** — Daemon passwords are encrypted at rest using Argon2id and ChaCha20-Poly1305.
