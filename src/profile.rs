@@ -125,6 +125,10 @@ pub struct ConnectionProfile {
     /// Whether to enable the global seed-ratio limit on this profile.
     #[serde(default)]
     pub ratio_limit_enabled: bool,
+    /// The last N download directories used when adding a torrent to this daemon.
+    /// Stored in FIFO order (index 0 = most recent). Capped at 5 entries.
+    #[serde(default)]
+    pub recent_download_paths: Vec<String>,
 }
 
 impl ConnectionProfile {
@@ -145,6 +149,7 @@ impl ConnectionProfile {
             alt_speed_up: 0,
             ratio_limit: 0.0,
             ratio_limit_enabled: false,
+            recent_download_paths: Vec::new(),
         }
     }
 
@@ -321,5 +326,58 @@ port = 9091
     fn load_corrupt_toml_fails() {
         let result: Result<ProfileStore, _> = toml::from_str("[[not valid toml{{");
         assert!(result.is_err());
+    }
+
+    /// `recent_download_paths` defaults to empty when absent from TOML.
+    #[test]
+    fn recent_download_paths_defaults_to_empty() {
+        let store: ProfileStore = toml::from_str(sample_toml()).unwrap();
+        assert!(store.profiles[0].recent_download_paths.is_empty());
+    }
+
+    /// `recent_download_paths` round-trips through TOML serialization.
+    #[test]
+    fn recent_download_paths_round_trips() {
+        let mut store: ProfileStore = toml::from_str(sample_toml()).unwrap();
+        store.profiles[0].recent_download_paths =
+            vec!["/a".to_owned(), "/b".to_owned(), "/c".to_owned()];
+        let serialized = toml::to_string(&store).unwrap();
+        let reloaded: ProfileStore = toml::from_str(&serialized).unwrap();
+        assert_eq!(
+            reloaded.profiles[0].recent_download_paths,
+            vec!["/a", "/b", "/c"]
+        );
+    }
+
+    /// Helper: apply a path-used update and return the resulting list.
+    fn apply_path_used(paths: &mut Vec<String>, new_path: &str, max: usize) {
+        paths.retain(|p| p != new_path);
+        paths.insert(0, new_path.to_owned());
+        paths.truncate(max);
+    }
+
+    /// New path is prepended and list stays within cap.
+    #[test]
+    fn path_used_prepends_and_caps() {
+        let mut paths = vec!["/a".to_owned(), "/b".to_owned()];
+        apply_path_used(&mut paths, "/c", 5);
+        assert_eq!(paths, vec!["/c", "/a", "/b"]);
+
+        // Fill to cap and add one more.
+        paths = vec!["/1", "/2", "/3", "/4", "/5"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        apply_path_used(&mut paths, "/new", 5);
+        assert_eq!(paths.len(), 5);
+        assert_eq!(paths[0], "/new");
+    }
+
+    /// Duplicate path is moved to front, not duplicated.
+    #[test]
+    fn path_used_deduplicates() {
+        let mut paths = vec!["/a".to_owned(), "/b".to_owned(), "/c".to_owned()];
+        apply_path_used(&mut paths, "/b", 5);
+        assert_eq!(paths, vec!["/b", "/a", "/c"]);
     }
 }

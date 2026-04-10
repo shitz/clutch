@@ -120,6 +120,10 @@ pub enum Message {
     /// Fire-and-forget: result of a background save; no state change needed.
     Noop,
 
+    /// A download directory was used when adding a torrent.
+    /// Updates the active profile's `recent_download_paths` and persists to disk.
+    ProfilePathUsed(String),
+
     // -- Tray --
     /// An action dispatched from the native system tray context menu or icon click.
     TrayAction(crate::tray::TrayAction),

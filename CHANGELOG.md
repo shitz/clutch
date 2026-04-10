@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Multi-add torrent support: the file picker now allows selecting multiple `.torrent` files at
+  once. Selected files are queued in FIFO order and presented one-by-one in the add dialog.
+- Cancel This / Cancel All buttons in the add dialog when multiple torrents are queued: "Cancel
+  This" skips the current torrent and advances to the next; "Cancel All" dismisses the entire
+  queue.
+- Recent download paths: the destination field in the add dialog now includes a dropdown listing
+  the last ten directories used for successful adds. The most recently used path is pre-filled
+  automatically. Paths are stored per-profile and persisted across sessions.
+
 ## [0.13.0] - 2026-04-09
 
 ### Added

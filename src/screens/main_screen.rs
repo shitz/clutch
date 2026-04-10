@@ -55,6 +55,8 @@ pub enum Message {
     TurtleModeToggled,
     /// Fresh session data from a periodic `session-get` poll — escalated to `app::update`.
     SessionDataLoaded(SessionData),
+    /// A download directory was used — escalated to `app::update` to persist path history.
+    ProfilePathUsed(String),
 }
 
 // -- State --------------------------------------------------------------------
@@ -121,6 +123,11 @@ impl MainScreen {
             // Turtle-mode toggle button: bubble to app so it can do the session-set.
             Message::List(torrent_list::Message::TurtleModeToggled) => {
                 Task::done(Message::TurtleModeToggled)
+            }
+
+            // Path-used notification: bubble to app to persist history.
+            Message::List(torrent_list::Message::ProfilePathUsed(path)) => {
+                Task::done(Message::ProfilePathUsed(path))
             }
 
             // Successful session-get response: bubble to app to update AppState.
@@ -610,7 +617,8 @@ impl MainScreen {
             Message::Disconnect
             | Message::OpenSettingsClicked
             | Message::TurtleModeToggled
-            | Message::SessionDataLoaded(_) => Task::none(),
+            | Message::SessionDataLoaded(_)
+            | Message::ProfilePathUsed(_) => Task::none(),
         }
     }
 

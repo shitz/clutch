@@ -23,6 +23,8 @@ use super::add_dialog::{self, AddDialogState, FileReadResult, TorrentFileInfo};
 use super::sort::SortDir;
 use super::{Message, SetLocationDialog, StatusFilter, TorrentListScreen};
 
+use std::collections::VecDeque;
+
 /// Apply a single torrent-list message to the screen state and return follow-up work.
 pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
     match msg {
@@ -217,46 +219,65 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
         // ── Add-torrent dialog ────────────────────────────────────────────────
         Message::AddTorrentClicked => Task::perform(
             async {
-                let handle = rfd::AsyncFileDialog::new()
+                let handles = rfd::AsyncFileDialog::new()
                     .add_filter("Torrent", &["torrent"])
-                    .pick_file()
+                    .pick_files()
                     .await;
-                let Some(handle) = handle else {
+                let Some(handles) = handles else {
                     return Err("cancelled".to_owned());
                 };
-                let bytes = handle.read().await;
-                let b64 = base64::prelude::BASE64_STANDARD.encode(&bytes);
-                let torrent = lava_torrent::torrent::v1::Torrent::read_from_bytes(&bytes)
-                    .map_err(|e| e.to_string())?;
-                let files = match &torrent.files {
-                    Some(files) => files
-                        .iter()
-                        .map(|f| TorrentFileInfo {
-                            path: f.path.to_string_lossy().into_owned(),
-                            size_bytes: f.length as u64,
-                        })
-                        .collect(),
-                    None => vec![TorrentFileInfo {
-                        path: torrent.name.clone(),
-                        size_bytes: torrent.length as u64,
-                    }],
-                };
-                Ok(FileReadResult {
-                    metainfo_b64: b64,
-                    files,
-                })
+                let mut queue: VecDeque<FileReadResult> = VecDeque::new();
+                for handle in handles {
+                    let bytes = handle.read().await;
+                    let b64 = base64::prelude::BASE64_STANDARD.encode(&bytes);
+                    let torrent = lava_torrent::torrent::v1::Torrent::read_from_bytes(&bytes)
+                        .map_err(|e| e.to_string())?;
+                    let files = match &torrent.files {
+                        Some(files) => files
+                            .iter()
+                            .map(|f| TorrentFileInfo {
+                                path: f.path.to_string_lossy().into_owned(),
+                                size_bytes: f.length as u64,
+                            })
+                            .collect(),
+                        None => vec![TorrentFileInfo {
+                            path: torrent.name.clone(),
+                            size_bytes: torrent.length as u64,
+                        }],
+                    };
+                    queue.push_back(FileReadResult {
+                        metainfo_b64: b64,
+                        files,
+                    });
+                }
+                if queue.is_empty() {
+                    return Err("cancelled".to_owned());
+                }
+                Ok(queue)
             },
             Message::TorrentFileRead,
         ),
 
-        Message::TorrentFileRead(Ok(result)) => {
-            let n = result.files.len();
+        Message::TorrentFileRead(Ok(mut queue)) => {
+            let total_count = queue.len();
+            let Some(first) = queue.pop_front() else {
+                return Task::none();
+            };
+            let n = first.files.len();
+            let initial_dest = state
+                .recent_download_paths
+                .first()
+                .cloned()
+                .unwrap_or_default();
             state.add_dialog = AddDialogState::AddFile {
-                metainfo_b64: result.metainfo_b64,
-                files: result.files,
+                metainfo_b64: first.metainfo_b64,
+                files: first.files,
                 selected: vec![true; n],
-                destination: String::new(),
+                destination: initial_dest,
                 error: None,
+                pending_torrents: queue,
+                is_dropdown_open: false,
+                total_count,
             };
             iced::widget::operation::focus(add_dialog::add_destination_id())
         }
@@ -270,9 +291,14 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
         }
 
         Message::AddLinkClicked => {
+            let initial_dest = state
+                .recent_download_paths
+                .first()
+                .cloned()
+                .unwrap_or_default();
             state.add_dialog = AddDialogState::AddLink {
                 magnet: String::new(),
-                destination: String::new(),
+                destination: initial_dest,
                 error: None,
             };
             iced::widget::operation::focus(add_dialog::add_magnet_id())
@@ -322,6 +348,57 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::AddCancelThis => {
+            advance_queue(state);
+            Task::none()
+        }
+
+        Message::AddCancelAll => {
+            state.add_dialog = AddDialogState::Hidden;
+            Task::none()
+        }
+
+        Message::AddDialogToggleDropdown => {
+            if let AddDialogState::AddFile {
+                is_dropdown_open, ..
+            } = &mut state.add_dialog
+            {
+                *is_dropdown_open = !*is_dropdown_open;
+            }
+            Task::none()
+        }
+
+        Message::AddDialogDismissDropdown => {
+            if let AddDialogState::AddFile {
+                is_dropdown_open, ..
+            } = &mut state.add_dialog
+            {
+                *is_dropdown_open = false;
+            }
+            Task::none()
+        }
+
+        Message::AddDialogRecentPathSelected(path) => {
+            match &mut state.add_dialog {
+                AddDialogState::AddFile {
+                    destination,
+                    is_dropdown_open,
+                    ..
+                } => {
+                    *destination = path;
+                    *is_dropdown_open = false;
+                }
+                AddDialogState::AddLink { destination, .. } => {
+                    *destination = path;
+                }
+                AddDialogState::Hidden => {}
+            }
+            Task::none()
+        }
+
+        // ProfilePathUsed is escalated to AppState via main_screen.
+        Message::ProfilePathUsed(_) => Task::none(),
+
         Message::AddConfirmed => {
             let (payload, download_dir, files_unwanted) = match &state.add_dialog {
                 AddDialogState::AddLink {
@@ -357,6 +434,9 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
                 }
                 AddDialogState::Hidden => return Task::none(),
             };
+
+            let used_path = download_dir.as_deref().unwrap_or("").to_owned();
+
             state.is_loading = true;
             tracing::info!("Submitting torrent-add");
             state.enqueue(RpcWork::TorrentAdd {
@@ -365,12 +445,21 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
                 download_dir,
                 files_unwanted,
             });
-            Task::none()
+
+            // Advance the queue immediately (sticky path — destination is not reset).
+            advance_queue(state);
+
+            // Notify AppState to persist the path history.
+            if !used_path.trim().is_empty() {
+                Task::done(Message::ProfilePathUsed(used_path))
+            } else {
+                Task::none()
+            }
         }
 
         Message::AddCompleted(Ok(())) => {
             tracing::info!("torrent-add succeeded, refreshing list");
-            state.add_dialog = AddDialogState::Hidden;
+            // Dialog was already advanced in AddConfirmed; only refresh the list.
             state.is_loading = true;
             state.enqueue_torrent_get();
             Task::none()
@@ -379,11 +468,8 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
         Message::AddCompleted(Err(err)) => {
             tracing::error!(error = %err, "torrent-add failed");
             state.is_loading = false;
-            match &mut state.add_dialog {
-                AddDialogState::AddLink { error, .. } => *error = Some(err),
-                AddDialogState::AddFile { error, .. } => *error = Some(err),
-                AddDialogState::Hidden => state.error = Some(err),
-            }
+            // The dialog has already advanced; surface the error in the general banner.
+            state.error = Some(err);
             Task::none()
         }
 
@@ -587,6 +673,46 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
                 });
             }
             Task::none()
+        }
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Pop the next torrent from the queue into the active dialog slot, or close
+/// the dialog if the queue is exhausted. The destination field is left unchanged
+/// (sticky path behavior — the user's input carries across the whole batch).
+fn advance_queue(state: &mut TorrentListScreen) {
+    // Take the current dialog out of the state so we can destructure it fully.
+    let current = std::mem::replace(&mut state.add_dialog, AddDialogState::Hidden);
+
+    let AddDialogState::AddFile {
+        mut pending_torrents,
+        total_count,
+        destination,
+        ..
+    } = current
+    else {
+        // Already Hidden or AddLink — leave as Hidden.
+        return;
+    };
+
+    match pending_torrents.pop_front() {
+        Some(next) => {
+            let n = next.files.len();
+            state.add_dialog = AddDialogState::AddFile {
+                metainfo_b64: next.metainfo_b64,
+                files: next.files,
+                selected: vec![true; n],
+                destination, // sticky: unchanged from previous torrent
+                error: None,
+                pending_torrents,
+                is_dropdown_open: false,
+                total_count,
+            };
+        }
+        None => {
+            // Queue exhausted — dialog is already Hidden from the mem::replace above.
         }
     }
 }

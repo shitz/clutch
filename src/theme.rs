@@ -93,6 +93,8 @@ pub const ICON_UNDO: char = '\u{E166}';
 pub const ICON_SPEED: char = '\u{E9E4}';
 /// Material Icons "folder" glyph — used for the Set Data Location context menu item.
 pub const ICON_FOLDER: char = '\u{E2C7}';
+/// Material Icons "arrow_drop_down" glyph — used for the recent-paths dropdown toggle.
+pub const ICON_ARROW_DROP_DOWN: char = '\u{E5C5}';
 
 // ── Checkbox icon codepoints ──────────────────────────────────────────────────
 

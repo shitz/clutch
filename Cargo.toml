@@ -10,7 +10,7 @@ chacha20poly1305 = "0.10"
 dark-light = "1"
 dirs = "5"
 iced = { version = "0.14", features = ["tokio", "canvas", "image"] }
-iced_aw = { version = "0.13", features = ["tabs"] }
+iced_aw = { version = "0.13", features = ["tabs", "drop_down"] }
 image = "0.25"
 lava_torrent = "0.11"
 rand = "0.8"

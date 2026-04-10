@@ -396,6 +396,7 @@ mod tests {
                 alt_speed_up: 0,
                 ratio_limit: 0.0,
                 ratio_limit_enabled: false,
+                recent_download_paths: Vec::new(),
             });
 
         let result = handle_message(
@@ -456,6 +457,7 @@ mod tests {
                 alt_speed_up: 0,
                 ratio_limit: 0.0,
                 ratio_limit_enabled: false,
+                recent_download_paths: Vec::new(),
             });
 
         handle_message(

@@ -338,7 +338,11 @@ pub fn view(
     // ── Modal overlay ─────────────────────────────────────────────────────────
     let after_add: Element<Message> = match &state.add_dialog {
         AddDialogState::Hidden => main_content,
-        dialog_state => stack![main_content, view_add_dialog(dialog_state)].into(),
+        dialog_state => stack![
+            main_content,
+            opaque(view_add_dialog(dialog_state, &state.recent_download_paths))
+        ]
+        .into(),
     };
 
     let after_delete: Element<Message> =

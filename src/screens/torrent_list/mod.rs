@@ -125,7 +125,7 @@ pub enum Message {
     ActionCompleted(Result<(), String>),
     // Add-torrent dialog
     AddTorrentClicked,
-    TorrentFileRead(Result<FileReadResult, String>),
+    TorrentFileRead(Result<std::collections::VecDeque<FileReadResult>, String>),
     AddLinkClicked,
     AddDialogMagnetChanged(String),
     AddDialogDestinationChanged(String),
@@ -134,7 +134,17 @@ pub enum Message {
     AddDialogDeselectAll,
     AddConfirmed,
     AddCancelled,
+    /// Skip the current torrent in the queue (multi-add only).
+    AddCancelThis,
+    /// Discard all remaining torrents in the queue.
+    AddCancelAll,
     AddCompleted(Result<(), String>),
+    // Recent-paths dropdown in add dialog
+    AddDialogToggleDropdown,
+    AddDialogDismissDropdown,
+    AddDialogRecentPathSelected(String),
+    /// A destination path was confirmed — bubble up to AppState to persist.
+    ProfilePathUsed(String),
     /// Fired when a SetFileWanted RPC completes (success or failure).
     /// Carries the file indices so the inspector can clear pending_wanted.
     FileWantedSettled(bool, Vec<usize>),
@@ -226,6 +236,10 @@ pub struct TorrentListScreen {
     pub window_height: f32,
     /// Approximate window width used for right-edge context-menu mitigation (px).
     pub window_width: f32,
+    /// Copy of the active profile's recent download paths, kept in sync by `AppState`.
+    /// Used by the add-dialog dropdown without requiring the profile to be threaded
+    /// through the view hierarchy.
+    pub recent_download_paths: Vec<String>,
 }
 
 impl TorrentListScreen {
@@ -250,6 +264,7 @@ impl TorrentListScreen {
             set_location_dialog: None,
             window_height: 800.0,
             window_width: 900.0,
+            recent_download_paths: Vec::new(),
         }
     }
 
@@ -652,6 +667,7 @@ mod tests {
     /// `TorrentFileRead(Ok)` opens the add-file dialog with the parsed files.
     #[test]
     fn torrent_file_read_ok_opens_add_file_dialog() {
+        use std::collections::VecDeque;
         let mut screen = make_screen();
         let result = FileReadResult {
             metainfo_b64: "dGVzdA==".to_owned(),
@@ -660,7 +676,9 @@ mod tests {
                 size_bytes: 1_073_741_824,
             }],
         };
-        let _ = update(&mut screen, Message::TorrentFileRead(Ok(result)));
+        let mut queue = VecDeque::new();
+        queue.push_back(result);
+        let _ = update(&mut screen, Message::TorrentFileRead(Ok(queue)));
         match &screen.add_dialog {
             AddDialogState::AddFile { files, .. } => {
                 assert_eq!(files.len(), 1);
@@ -670,39 +688,24 @@ mod tests {
         }
     }
 
-    /// `AddCompleted(Ok)` clears the dialog and triggers an immediate refresh.
+    /// `AddCompleted(Ok)` triggers an immediate refresh (dialog already advanced by AddConfirmed).
     #[test]
-    fn add_completed_ok_clears_dialog_and_polls() {
+    fn add_completed_ok_polls() {
         let mut screen = make_screen();
-        screen.add_dialog = AddDialogState::AddLink {
-            magnet: "magnet:?xt=urn:btih:abc".to_owned(),
-            destination: String::new(),
-            error: None,
-        };
+        // Dialog is already Hidden (advanced by AddConfirmed before AddCompleted arrives).
         let _ = update(&mut screen, Message::AddCompleted(Ok(())));
-        assert!(matches!(screen.add_dialog, AddDialogState::Hidden));
         assert!(screen.is_loading);
     }
 
-    /// `AddCompleted(Err)` stores the error inside the dialog without closing it.
+    /// `AddCompleted(Err)` stores the error in the general error banner.
     #[test]
-    fn add_completed_err_stores_error_in_dialog() {
+    fn add_completed_err_stores_error_in_banner() {
         let mut screen = make_screen();
-        screen.add_dialog = AddDialogState::AddLink {
-            magnet: "magnet:?xt=urn:btih:abc".to_owned(),
-            destination: String::new(),
-            error: None,
-        };
         let _ = update(
             &mut screen,
             Message::AddCompleted(Err("daemon error".to_owned())),
         );
-        match &screen.add_dialog {
-            AddDialogState::AddLink { error, .. } => {
-                assert_eq!(error.as_deref(), Some("daemon error"));
-            }
-            other => panic!("expected AddLink dialog still open, got {other:?}"),
-        }
+        assert_eq!(screen.error.as_deref(), Some("daemon error"));
     }
 
     /// `ColumnHeaderClicked` cycles unsorted, ascending, descending, then unsorted.
@@ -758,6 +761,9 @@ mod tests {
             selected: vec![],
             destination: "/downloads".to_owned(),
             error: None,
+            pending_torrents: std::collections::VecDeque::new(),
+            is_dropdown_open: false,
+            total_count: 1,
         };
         let _ = update(&mut screen, Message::DialogTabKeyPressed { shift: false });
         // Dialog state must be unchanged.
@@ -843,6 +849,9 @@ mod tests {
             selected: vec![true],
             destination: "/downloads".to_owned(),
             error: None,
+            pending_torrents: std::collections::VecDeque::new(),
+            is_dropdown_open: false,
+            total_count: 1,
         };
         let _ = update(&mut screen, Message::DialogEnterPressed);
         assert!(
@@ -875,6 +884,9 @@ mod tests {
             files,
             destination: String::new(),
             error: None,
+            pending_torrents: std::collections::VecDeque::new(),
+            is_dropdown_open: false,
+            total_count: 1,
         };
         screen
     }

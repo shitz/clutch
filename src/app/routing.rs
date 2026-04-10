@@ -83,6 +83,32 @@ pub(super) fn handle_global_message(
             }
             Some(Task::none())
         }
+        Message::Main(main_screen::Message::ProfilePathUsed(path)) => {
+            let Some(profile_id) = state.active_profile else {
+                return Some(Task::none());
+            };
+            let Some(profile) = state
+                .profiles
+                .profiles
+                .iter_mut()
+                .find(|p| p.id == profile_id)
+            else {
+                return Some(Task::none());
+            };
+            // Prepend, dedup, cap at 10.
+            profile.recent_download_paths.retain(|p| p != path);
+            profile.recent_download_paths.insert(0, path.clone());
+            profile.recent_download_paths.truncate(10);
+            let updated_paths = profile.recent_download_paths.clone();
+            // Propagate into the live TorrentListScreen so the view stays consistent.
+            if let Screen::Main(main) = &mut state.screen {
+                main.list.recent_download_paths = updated_paths;
+            }
+            let snapshot = state.profiles.clone();
+            Some(Task::perform(async move { snapshot.save().await }, |_| {
+                Message::Noop
+            }))
+        }
         // Update tray speed labels on every poll; return None so main still processes it.
         Message::Main(main_screen::Message::List(torrent_list::Message::TorrentsUpdated(Ok(
             torrents,
@@ -203,6 +229,13 @@ pub(super) fn handle_connection_message(state: &mut AppState, message: Message) 
             Some(profile_id),
             state.profiles.general.refresh_interval,
         )));
+        // Seed the list with the profile's recent download paths so the add-dialog
+        // dropdown is immediately populated without waiting for a ProfilePathUsed event.
+        if let Screen::Main(main) = &mut state.screen
+            && let Some(profile) = state.profiles.get(profile_id)
+        {
+            main.list.recent_download_paths = profile.recent_download_paths.clone();
+        }
         tracing::info!(profile_id = %profile_id, "Connected via saved profile");
 
         let save_task = Task::perform(async move { profiles_snapshot.save().await }, |_| {
