@@ -102,3 +102,22 @@ jobs:
           files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-homebrew:
+    name: Bump Homebrew Cask
+    runs-on: ubuntu-latest
+    needs: create-release
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Update Homebrew Cask
+        uses: mislav/bump-homebrew-formula-action@v4
+        with:
+          formula-name: clutch
+          formula-path: Casks/clutch.rb
+          homebrew-tap: shitz/homebrew-clutch
+          base-branch: main
+          download-url: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/Clutch_${{ github.ref_name }}_aarch64.dmg
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
