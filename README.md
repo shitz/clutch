@@ -27,10 +27,14 @@ JSON-RPC API.
   data on the remote daemon directly from a right-click context menu.
 - **Detailed Inspector** — View tracker status, connected peers, and select specific files within a
   torrent for download.
-- **Bandwidth Control** — Toggle global alternative speed limits (Turtle Mode) from the toolbar, or
-  set strict per-torrent download, upload, and seeding ratio caps.
 - **Bulk Actions** — Select multiple torrents to start, pause, delete, or edit options across the
   entire selection simultaneously.
+- **Multi-Torrent Add Queue** — Select multiple `.torrent` files at once for sequential addition,
+  with the ability to cancel individual items or the entire queue.
+- **Bandwidth Control** — Toggle global alternative speed limits (Turtle Mode) from the toolbar, or
+  set strict per-torrent download, upload, and seeding ratio caps.
+- **Queue Management** — Configure the daemon's download and seed queue limits from the settings
+  panel, and reorder pending/downloading torrents via context menu actions.
 - **Multiple Connection Profiles** — Save and switch between different remote Transmission instances
   seamlessly.
 - **Secure Storage** — Daemon passwords are encrypted at rest using Argon2id and ChaCha20-Poly1305.
