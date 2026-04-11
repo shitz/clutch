@@ -56,6 +56,26 @@ Release](https://github.com/shitz/clutch/releases).
 
 ### macOS (Apple Silicon)
 
+#### Homebrew
+
+Add the tap and install via Homebrew:
+
+```sh
+brew tap shitz/clutch
+
+brew install --cask clutch
+```
+
+**Gatekeeper workaround:** Because Clutch is unsigned, macOS will refuse to open it with an "app is
+damaged" error. To bypass this, run the following command in Terminal after dragging it to
+Applications:
+
+```sh
+xattr -cr /Applications/Clutch.app
+```
+
+#### Manual
+
 Download `Clutch_<version>_aarch64.dmg`, open it, and drag **Clutch.app** into your Applications
 folder.
 
@@ -76,7 +96,7 @@ click **More info** → **Run anyway**.
 
 ### Linux
 
-**AppImage (universal):**
+#### AppImage (universal)
 
 Download `clutch_<version>_x86_64.AppImage`, make it executable, and run it:
 
@@ -85,7 +105,7 @@ chmod +x clutch_<version>_x86_64.AppImage
 ./clutch_<version>_x86_64.AppImage
 ```
 
-**Debian/Ubuntu (.deb):**
+#### Debian/Ubuntu
 
 ```sh
 sudo dpkg -i clutch_<version>_amd64.deb
