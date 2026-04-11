@@ -59,11 +59,11 @@ use crate::screens::settings::{self, SettingsScreen};
 #[derive(Debug)]
 pub enum Screen {
     /// The initial connection form. Shown on startup and after Disconnect.
-    Connection(ConnectionScreen),
+    Connection(Box<ConnectionScreen>),
     /// The main torrent list. Shown after a successful connection.
     Main(Box<MainScreen>),
     /// The full-screen settings / profiles editor.
-    Settings(SettingsScreen),
+    Settings(Box<SettingsScreen>),
 }
 
 // ── Message ───────────────────────────────────────────────────────────────────
@@ -191,7 +191,7 @@ impl AppState {
         #[cfg(test)]
         let tray = None;
         let state = AppState {
-            screen: Screen::Connection(ConnectionScreen::default()),
+            screen: Screen::Connection(Box::default()),
             theme,
             profiles: initial.clone(),
             active_profile: None,

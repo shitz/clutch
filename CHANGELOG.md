@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Queue management: The right-click context menu now includes **Move to Top**, **Move Up**, **Move
+  Down**, and **Move to Bottom** actions.
+- A new **Queueing** card in the Connections settings panel lets you enable/disable the
+  download and seed queues and configure the maximum number of active transfers for each.
 - Multi-add torrent support: the file picker now allows selecting multiple `.torrent` files at
   once. Selected files are queued in FIFO order and presented one-by-one in the add dialog.
 - Cancel This / Cancel All buttons in the add dialog when multiple torrents are queued: "Cancel

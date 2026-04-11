@@ -52,7 +52,9 @@ pub async fn session_get(
 ) -> Result<SessionData, RpcError> {
     tracing::debug!(%url, "Probing daemon with session-get");
     let args = serde_json::json!({
-        "fields": ["alt-speed-enabled", "alt-speed-down", "alt-speed-up"]
+        "fields": ["alt-speed-enabled", "alt-speed-down", "alt-speed-up",
+                   "download-queue-enabled", "download-queue-size",
+                   "seed-queue-enabled", "seed-queue-size"]
     });
     match post_rpc(
         url,
@@ -110,6 +112,22 @@ fn parse_session_data(session_id: String, arguments: &serde_json::Value) -> Sess
             .unwrap_or(0) as u32,
         alt_speed_up: arguments
             .get("alt-speed-up")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32,
+        download_queue_enabled: arguments
+            .get("download-queue-enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        download_queue_size: arguments
+            .get("download-queue-size")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32,
+        seed_queue_enabled: arguments
+            .get("seed-queue-enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        seed_queue_size: arguments
+            .get("seed-queue-size")
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as u32,
     }
@@ -315,6 +333,90 @@ pub async fn torrent_add(
     }
 }
 
+/// Move one or more torrents to the top of the queue.
+pub async fn queue_move_top(
+    url: &str,
+    credentials: &TransmissionCredentials,
+    session_id: &str,
+    ids: &[i64],
+) -> Result<(), RpcError> {
+    tracing::debug!(%url, %session_id, ?ids, "Sending queue-move-top");
+    let args = serde_json::json!({ "ids": ids });
+    let resp = post_rpc(
+        url,
+        credentials,
+        session_id,
+        "queue-move-top",
+        Some(args),
+        Duration::from_secs(10),
+    )
+    .await?;
+    check_success(resp, "queue-move-top")
+}
+
+/// Move one or more torrents up one position in the queue.
+pub async fn queue_move_up(
+    url: &str,
+    credentials: &TransmissionCredentials,
+    session_id: &str,
+    ids: &[i64],
+) -> Result<(), RpcError> {
+    tracing::debug!(%url, %session_id, ?ids, "Sending queue-move-up");
+    let args = serde_json::json!({ "ids": ids });
+    let resp = post_rpc(
+        url,
+        credentials,
+        session_id,
+        "queue-move-up",
+        Some(args),
+        Duration::from_secs(10),
+    )
+    .await?;
+    check_success(resp, "queue-move-up")
+}
+
+/// Move one or more torrents down one position in the queue.
+pub async fn queue_move_down(
+    url: &str,
+    credentials: &TransmissionCredentials,
+    session_id: &str,
+    ids: &[i64],
+) -> Result<(), RpcError> {
+    tracing::debug!(%url, %session_id, ?ids, "Sending queue-move-down");
+    let args = serde_json::json!({ "ids": ids });
+    let resp = post_rpc(
+        url,
+        credentials,
+        session_id,
+        "queue-move-down",
+        Some(args),
+        Duration::from_secs(10),
+    )
+    .await?;
+    check_success(resp, "queue-move-down")
+}
+
+/// Move one or more torrents to the bottom of the queue.
+pub async fn queue_move_bottom(
+    url: &str,
+    credentials: &TransmissionCredentials,
+    session_id: &str,
+    ids: &[i64],
+) -> Result<(), RpcError> {
+    tracing::debug!(%url, %session_id, ?ids, "Sending queue-move-bottom");
+    let args = serde_json::json!({ "ids": ids });
+    let resp = post_rpc(
+        url,
+        credentials,
+        session_id,
+        "queue-move-bottom",
+        Some(args),
+        Duration::from_secs(10),
+    )
+    .await?;
+    check_success(resp, "queue-move-bottom")
+}
+
 /// Relocate one or more torrents' data on the daemon's filesystem.
 ///
 /// When `move_data` is `true`, the daemon physically moves the existing
@@ -343,7 +445,7 @@ pub async fn torrent_set_location(
     check_success(resp, "torrent-set-location")
 }
 
-/// Set per-file wanted state for an existing torrent.
+/// Relocate one or more torrents' data on the daemon's filesystem.
 ///
 /// Pass `wanted = true` to schedule files for download; `false` to skip them.
 /// The `file_indices` slice contains zero-based indices matching the `files`
@@ -1229,5 +1331,143 @@ mod tests {
         let url = format!("{}/transmission/rpc", server.uri());
         let result = torrent_set_location(&url, &creds, "sid", &[1], "/path", true).await;
         assert!(matches!(result, Err(RpcError::AuthError)));
+    }
+
+    // ── queue_move_* ──────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn queue_move_top_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "result": "success", "arguments": {} })),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        assert!(queue_move_top(&url, &creds, "sid", &[2, 5]).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn queue_move_top_session_rotation() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(409).insert_header(SESSION_ID_HEADER, "rotated-sid"),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = queue_move_top(&url, &creds, "old-sid", &[1]).await;
+        assert!(matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "rotated-sid"));
+    }
+
+    #[tokio::test]
+    async fn queue_move_up_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "result": "success", "arguments": {} })),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        assert!(queue_move_up(&url, &creds, "sid", &[3]).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn queue_move_up_session_rotation() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(ResponseTemplate::new(409).insert_header(SESSION_ID_HEADER, "new-sid"))
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = queue_move_up(&url, &creds, "old-sid", &[3]).await;
+        assert!(matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "new-sid"));
+    }
+
+    #[tokio::test]
+    async fn queue_move_down_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "result": "success", "arguments": {} })),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        assert!(queue_move_down(&url, &creds, "sid", &[3]).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn queue_move_down_session_rotation() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(ResponseTemplate::new(409).insert_header(SESSION_ID_HEADER, "new-sid"))
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = queue_move_down(&url, &creds, "old-sid", &[3]).await;
+        assert!(matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "new-sid"));
+    }
+
+    #[tokio::test]
+    async fn queue_move_bottom_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "result": "success", "arguments": {} })),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        assert!(
+            queue_move_bottom(&url, &creds, "sid", &[1, 4])
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn queue_move_bottom_session_rotation() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(409).insert_header(SESSION_ID_HEADER, "rotated-sid"),
+            )
+            .mount(&server)
+            .await;
+
+        let creds = test_credentials();
+        let url = format!("{}/transmission/rpc", server.uri());
+        let result = queue_move_bottom(&url, &creds, "old-sid", &[1, 4]).await;
+        assert!(matches!(result, Err(RpcError::SessionRotated(ref id)) if id == "rotated-sid"));
     }
 }

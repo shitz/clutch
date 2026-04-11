@@ -174,6 +174,14 @@ pub enum Message {
     ContextMenuDelete,
     /// "Set Data Location" chosen from the context menu — opens the modal dialog.
     OpenSetLocation,
+    /// Move selected torrents to the top of the queue.
+    ContextMenuQueueMoveTop,
+    /// Move selected torrents one position up in the queue.
+    ContextMenuQueueMoveUp,
+    /// Move selected torrents one position down in the queue.
+    ContextMenuQueueMoveDown,
+    /// Move selected torrents to the bottom of the queue.
+    ContextMenuQueueMoveBottom,
     // Set-location dialog
     SetLocationPathChanged(String),
     SetLocationMoveToggled,

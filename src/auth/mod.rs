@@ -397,6 +397,10 @@ mod tests {
                 ratio_limit: 0.0,
                 ratio_limit_enabled: false,
                 recent_download_paths: Vec::new(),
+                download_queue_enabled: false,
+                download_queue_size: 0,
+                seed_queue_enabled: false,
+                seed_queue_size: 0,
             });
 
         let result = handle_message(
@@ -458,6 +462,10 @@ mod tests {
                 ratio_limit: 0.0,
                 ratio_limit_enabled: false,
                 recent_download_paths: Vec::new(),
+                download_queue_enabled: false,
+                download_queue_size: 0,
+                seed_queue_enabled: false,
+                seed_queue_size: 0,
             });
 
         handle_message(

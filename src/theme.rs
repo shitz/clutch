@@ -95,6 +95,14 @@ pub const ICON_SPEED: char = '\u{E9E4}';
 pub const ICON_FOLDER: char = '\u{E2C7}';
 /// Material Icons "arrow_drop_down" glyph — used for the recent-paths dropdown toggle.
 pub const ICON_ARROW_DROP_DOWN: char = '\u{E5C5}';
+/// Material Icons "vertical_align_top" glyph — move torrent to top of queue.
+pub const ICON_QUEUE_TOP: char = '\u{E25A}';
+/// Material Icons "arrow_upward" glyph — move torrent one position up in queue.
+pub const ICON_QUEUE_UP: char = '\u{E5D8}';
+/// Material Icons "arrow_downward" glyph — move torrent one position down in queue.
+pub const ICON_QUEUE_DOWN: char = '\u{E5DB}';
+/// Material Icons "vertical_align_bottom" glyph — move torrent to bottom of queue.
+pub const ICON_QUEUE_BOTTOM: char = '\u{E258}';
 
 // ── Checkbox icon codepoints ──────────────────────────────────────────────────
 

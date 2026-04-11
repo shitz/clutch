@@ -616,6 +616,62 @@ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::ContextMenuQueueMoveTop => {
+            state.context_menu = None;
+            let ids: Vec<i64> = state.selected_ids.iter().copied().collect();
+            if !ids.is_empty() {
+                tracing::info!(?ids, "Moving torrents to top of queue");
+                state.is_loading = true;
+                state.enqueue(RpcWork::QueueMoveTop {
+                    params: state.params.clone(),
+                    ids,
+                });
+            }
+            Task::none()
+        }
+
+        Message::ContextMenuQueueMoveUp => {
+            state.context_menu = None;
+            let ids: Vec<i64> = state.selected_ids.iter().copied().collect();
+            if !ids.is_empty() {
+                tracing::info!(?ids, "Moving torrents up in queue");
+                state.is_loading = true;
+                state.enqueue(RpcWork::QueueMoveUp {
+                    params: state.params.clone(),
+                    ids,
+                });
+            }
+            Task::none()
+        }
+
+        Message::ContextMenuQueueMoveDown => {
+            state.context_menu = None;
+            let ids: Vec<i64> = state.selected_ids.iter().copied().collect();
+            if !ids.is_empty() {
+                tracing::info!(?ids, "Moving torrents down in queue");
+                state.is_loading = true;
+                state.enqueue(RpcWork::QueueMoveDown {
+                    params: state.params.clone(),
+                    ids,
+                });
+            }
+            Task::none()
+        }
+
+        Message::ContextMenuQueueMoveBottom => {
+            state.context_menu = None;
+            let ids: Vec<i64> = state.selected_ids.iter().copied().collect();
+            if !ids.is_empty() {
+                tracing::info!(?ids, "Moving torrents to bottom of queue");
+                state.is_loading = true;
+                state.enqueue(RpcWork::QueueMoveBottom {
+                    params: state.params.clone(),
+                    ids,
+                });
+            }
+            Task::none()
+        }
+
         Message::OpenSetLocation => {
             state.context_menu = None;
             let ids: Vec<i64> = state.selected_ids.iter().copied().collect();

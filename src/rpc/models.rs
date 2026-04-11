@@ -70,6 +70,14 @@ pub struct SessionData {
     pub alt_speed_down: u32,
     #[serde(rename = "alt-speed-up", default)]
     pub alt_speed_up: u32,
+    #[serde(rename = "download-queue-enabled", default)]
+    pub download_queue_enabled: bool,
+    #[serde(rename = "download-queue-size", default)]
+    pub download_queue_size: u32,
+    #[serde(rename = "seed-queue-enabled", default)]
+    pub seed_queue_enabled: bool,
+    #[serde(rename = "seed-queue-size", default)]
+    pub seed_queue_size: u32,
 }
 
 /// Arguments for a `session-set` RPC call. Only `Some` fields are serialized.
@@ -99,6 +107,20 @@ pub struct SessionSetArgs {
     pub seed_ratio_limit: Option<f64>,
     #[serde(rename = "seedRatioLimited", skip_serializing_if = "Option::is_none")]
     pub seed_ratio_limited: Option<bool>,
+    #[serde(
+        rename = "download-queue-enabled",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub download_queue_enabled: Option<bool>,
+    #[serde(
+        rename = "download-queue-size",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub download_queue_size: Option<u32>,
+    #[serde(rename = "seed-queue-enabled", skip_serializing_if = "Option::is_none")]
+    pub seed_queue_enabled: Option<bool>,
+    #[serde(rename = "seed-queue-size", skip_serializing_if = "Option::is_none")]
+    pub seed_queue_size: Option<u32>,
 }
 
 /// Arguments for a `torrent-set` bandwidth call. Only `Some` fields are serialized.

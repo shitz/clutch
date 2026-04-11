@@ -81,6 +81,20 @@ pub(super) fn handle_global_message(
             if let Some(tray) = &state.tray {
                 tray.items.set_turtle_active(data.alt_speed_enabled);
             }
+            // Sync daemon-authoritative queue settings back into the active profile so
+            // the settings screen always reflects what the daemon actually has.
+            if let Some(profile_id) = state.active_profile
+                && let Some(profile) = state
+                    .profiles
+                    .profiles
+                    .iter_mut()
+                    .find(|p| p.id == profile_id)
+            {
+                profile.download_queue_enabled = data.download_queue_enabled;
+                profile.download_queue_size = data.download_queue_size;
+                profile.seed_queue_enabled = data.seed_queue_enabled;
+                profile.seed_queue_size = data.seed_queue_size;
+            }
             Some(Task::none())
         }
         Message::Main(main_screen::Message::ProfilePathUsed(path)) => {
@@ -208,6 +222,20 @@ pub(super) fn handle_connection_message(state: &mut AppState, message: Message) 
         state.active_profile = Some(profile_id);
         state.profiles.last_connected = Some(profile_id);
 
+        // Sync daemon-authoritative queue settings into the profile before any push,
+        // so the settings screen always reflects the daemon's actual configuration.
+        if let Some(profile) = state
+            .profiles
+            .profiles
+            .iter_mut()
+            .find(|p| p.id == profile_id)
+        {
+            profile.download_queue_enabled = success.download_queue_enabled;
+            profile.download_queue_size = success.download_queue_size;
+            profile.seed_queue_enabled = success.seed_queue_enabled;
+            profile.seed_queue_size = success.seed_queue_size;
+        }
+
         let profile_name = state
             .profiles
             .get(profile_id)
@@ -275,7 +303,11 @@ pub(super) fn make_push_bandwidth_task(
         || profile.alt_speed_down != 0
         || profile.alt_speed_up != 0
         || profile.ratio_limit_enabled
-        || profile.ratio_limit != 0.0;
+        || profile.ratio_limit != 0.0
+        || profile.download_queue_enabled
+        || profile.download_queue_size != 0
+        || profile.seed_queue_enabled
+        || profile.seed_queue_size != 0;
     if !has_anything {
         return None;
     }
@@ -300,6 +332,10 @@ pub(super) fn make_push_bandwidth_task(
         },
         seed_ratio_limited: Some(profile.ratio_limit_enabled),
         seed_ratio_limit: Some(profile.ratio_limit),
+        download_queue_enabled: Some(profile.download_queue_enabled),
+        download_queue_size: Some(profile.download_queue_size),
+        seed_queue_enabled: Some(profile.seed_queue_enabled),
+        seed_queue_size: Some(profile.seed_queue_size),
         ..Default::default()
     };
 
@@ -344,7 +380,7 @@ pub(super) fn probe_profile(state: &AppState, profile_id: Uuid) -> Task<Message>
 pub(super) fn show_connection_launchpad(state: &mut AppState) -> Task<Message> {
     let connection = ConnectionScreen::new_launchpad(&state.profiles.profiles);
     let focus = connection.initial_focus_task().map(Message::Connection);
-    state.screen = Screen::Connection(connection);
+    state.screen = Screen::Connection(Box::new(connection));
     focus
 }
 
@@ -353,20 +389,20 @@ pub(super) fn open_settings(state: &mut AppState, tab: SettingsTab) {
     if let Screen::Main(_) = &state.screen {
         if let Screen::Main(main) = std::mem::replace(
             &mut state.screen,
-            Screen::Settings(SettingsScreen::new(
+            Screen::Settings(Box::new(SettingsScreen::new(
                 &state.profiles,
                 state.active_profile,
                 tab,
-            )),
+            ))),
         ) {
             state.stashed_main = Some(main);
         }
     } else {
-        state.screen = Screen::Settings(SettingsScreen::new(
+        state.screen = Screen::Settings(Box::new(SettingsScreen::new(
             &state.profiles,
             state.active_profile,
             tab,
-        ));
+        )));
     }
 }
 
@@ -388,10 +424,13 @@ fn apply_auto_connect_result(
     match result {
         Ok(info) => {
             let profile_id = state.profiles.last_connected.expect("set before probe");
-            let profile = state.profiles.get(profile_id).expect("profile must exist");
-            let credentials = profile_credentials(state, profile);
             let session_id = info.session_id.clone();
-            let profile_name = profile.name.clone();
+            let profile_name = state
+                .profiles
+                .get(profile_id)
+                .expect("profile must exist")
+                .name
+                .clone();
             tracing::info!(profile = %profile_name, "Auto-connect succeeded");
             state.alt_speed_enabled = info.alt_speed_enabled;
             if let Some(tray) = &state.tray {
@@ -399,6 +438,21 @@ fn apply_auto_connect_result(
                 tray.items.set_turtle_active(info.alt_speed_enabled);
             }
 
+            // Sync daemon-authoritative queue settings into the profile.
+            if let Some(profile) = state
+                .profiles
+                .profiles
+                .iter_mut()
+                .find(|p| p.id == profile_id)
+            {
+                profile.download_queue_enabled = info.download_queue_enabled;
+                profile.download_queue_size = info.download_queue_size;
+                profile.seed_queue_enabled = info.seed_queue_enabled;
+                profile.seed_queue_size = info.seed_queue_size;
+            }
+
+            let profile = state.profiles.get(profile_id).expect("profile must exist");
+            let credentials = profile_credentials(state, profile);
             let push_task = make_push_bandwidth_task(
                 &credentials.rpc_url(),
                 &credentials,

@@ -14,10 +14,15 @@
 
 //! Context menu and modal overlays owned by the torrent list screen.
 
-use iced::widget::{Space, button, checkbox, column, container, mouse_area, row, stack, text};
+use iced::widget::{
+    Space, button, checkbox, column, container, mouse_area, row, rule, stack, text,
+};
 use iced::{Alignment, Element, Length};
 
-use crate::theme::{ICON_DELETE, ICON_FOLDER, ICON_PAUSE, ICON_PLAY, MATERIAL_ICONS};
+use crate::theme::{
+    ICON_DELETE, ICON_FOLDER, ICON_PAUSE, ICON_PLAY, ICON_QUEUE_BOTTOM, ICON_QUEUE_DOWN,
+    ICON_QUEUE_TOP, ICON_QUEUE_UP, MATERIAL_ICONS,
+};
 
 use super::{Message, SetLocationDialog, TorrentListScreen};
 
@@ -51,6 +56,27 @@ fn menu_item<'a>(
     } else {
         button.style(crate::theme::m3_menu_item_disabled).into()
     }
+}
+
+/// Renders a labelled horizontal divider to visually group context menu sections.
+fn menu_section<'a>(label: &'a str) -> Element<'a, Message> {
+    column![
+        rule::horizontal(1),
+        text(label)
+            .size(10)
+            .style(|t: &iced::Theme| iced::widget::text::Style {
+                color: Some(t.palette().text.scale_alpha(0.45)),
+            })
+            .width(Length::Fill),
+    ]
+    .spacing(0)
+    .padding(iced::Padding {
+        top: 4.0,
+        bottom: 0.0,
+        left: 16.0,
+        right: 16.0,
+    })
+    .into()
 }
 
 /// Builds the context menu overlay element when a context menu is open.
@@ -106,6 +132,27 @@ pub fn view_context_menu_overlay(state: &TorrentListScreen) -> Option<Element<'_
                 ICON_FOLDER,
                 "Set Data Location",
                 Some(Message::OpenSetLocation)
+            ),
+            menu_section("Queue"),
+            menu_item(
+                ICON_QUEUE_TOP,
+                "Move to Top",
+                Some(Message::ContextMenuQueueMoveTop)
+            ),
+            menu_item(
+                ICON_QUEUE_UP,
+                "Move Up",
+                Some(Message::ContextMenuQueueMoveUp)
+            ),
+            menu_item(
+                ICON_QUEUE_DOWN,
+                "Move Down",
+                Some(Message::ContextMenuQueueMoveDown)
+            ),
+            menu_item(
+                ICON_QUEUE_BOTTOM,
+                "Move to Bottom",
+                Some(Message::ContextMenuQueueMoveBottom),
             ),
         ]
         .spacing(0),

@@ -53,6 +53,14 @@ pub struct ConnectSuccess {
     pub alt_speed_down_kbps: u32,
     /// Alt-speed upload ceiling KB/s from the daemon.
     pub alt_speed_up_kbps: u32,
+    /// Whether the download queue is enabled on the daemon.
+    pub download_queue_enabled: bool,
+    /// Maximum number of active downloads on the daemon.
+    pub download_queue_size: u32,
+    /// Whether the seed queue is enabled on the daemon.
+    pub seed_queue_enabled: bool,
+    /// Maximum number of active seeds on the daemon.
+    pub seed_queue_size: u32,
 }
 
 // ── Message ───────────────────────────────────────────────────────────────────
@@ -580,6 +588,10 @@ impl ConnectionScreen {
                     alt_speed_enabled: info.alt_speed_enabled,
                     alt_speed_down_kbps: info.alt_speed_down,
                     alt_speed_up_kbps: info.alt_speed_up,
+                    download_queue_enabled: info.download_queue_enabled,
+                    download_queue_size: info.download_queue_size,
+                    seed_queue_enabled: info.seed_queue_enabled,
+                    seed_queue_size: info.seed_queue_size,
                 };
                 self.is_connecting = false;
                 self.connecting_profile_id = None;

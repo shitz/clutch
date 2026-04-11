@@ -264,6 +264,10 @@ impl SettingsScreen {
                     p.alt_speed_up = draft.alt_speed_up.parse().unwrap_or(0);
                     p.ratio_limit = draft.ratio_limit.parse().unwrap_or(0.0);
                     p.ratio_limit_enabled = draft.ratio_limit_enabled;
+                    p.download_queue_enabled = draft.download_queue_enabled;
+                    p.download_queue_size = draft.download_queue_size.parse().unwrap_or(0);
+                    p.seed_queue_enabled = draft.seed_queue_enabled;
+                    p.seed_queue_size = draft.seed_queue_size.parse().unwrap_or(0);
                     // Clear encrypted password if user explicitly set an empty password.
                     if draft.password_changed && draft.password.is_empty() {
                         p.encrypted_password = None;
@@ -464,6 +468,38 @@ impl SettingsScreen {
                     && let Some(d) = &mut self.draft
                 {
                     d.ratio_limit = v;
+                    self.dirty = true;
+                }
+                (Task::none(), None)
+            }
+            Message::DraftDownloadQueueEnabledToggled(v) => {
+                if let Some(d) = &mut self.draft {
+                    d.download_queue_enabled = v;
+                    self.dirty = true;
+                }
+                (Task::none(), None)
+            }
+            Message::DraftDownloadQueueSizeChanged(v) => {
+                if (v.is_empty() || v.chars().all(|c| c.is_ascii_digit()))
+                    && let Some(d) = &mut self.draft
+                {
+                    d.download_queue_size = v;
+                    self.dirty = true;
+                }
+                (Task::none(), None)
+            }
+            Message::DraftSeedQueueEnabledToggled(v) => {
+                if let Some(d) = &mut self.draft {
+                    d.seed_queue_enabled = v;
+                    self.dirty = true;
+                }
+                (Task::none(), None)
+            }
+            Message::DraftSeedQueueSizeChanged(v) => {
+                if (v.is_empty() || v.chars().all(|c| c.is_ascii_digit()))
+                    && let Some(d) = &mut self.draft
+                {
+                    d.seed_queue_size = v;
                     self.dirty = true;
                 }
                 (Task::none(), None)

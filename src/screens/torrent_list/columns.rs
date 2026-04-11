@@ -24,7 +24,7 @@ use super::sort::{SortColumn, SortDir};
 use super::{Message, TorrentListScreen};
 
 pub(crate) const W_STATUS: f32 = 90.0;
-pub(crate) const W_SIZE: f32 = 80.0;
+pub(crate) const W_SIZE: f32 = 90.0;
 pub(crate) const W_SPEED_DOWN: f32 = 90.0;
 pub(crate) const W_SPEED_UP: f32 = 90.0;
 pub(crate) const W_ETA: f32 = 80.0;

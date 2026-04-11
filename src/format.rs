@@ -24,10 +24,13 @@ pub fn format_size(bytes: i64) -> String {
         return "—".to_owned();
     }
     let bytes = bytes as u64;
+    const TIB: u64 = 1 << 40;
     const GIB: u64 = 1 << 30;
     const MIB: u64 = 1 << 20;
     const KIB: u64 = 1 << 10;
-    if bytes >= GIB {
+    if bytes >= TIB {
+        format!("{:.2} TB", bytes as f64 / TIB as f64)
+    } else if bytes >= GIB {
         format!("{:.2} GB", bytes as f64 / GIB as f64)
     } else if bytes >= MIB {
         format!("{:.2} MB", bytes as f64 / MIB as f64)
@@ -47,9 +50,12 @@ pub fn format_speed(bps: i64) -> String {
         return "—".to_owned();
     }
     let bps = bps as u64;
+    const GIB: u64 = 1 << 30;
     const MIB: u64 = 1 << 20;
     const KIB: u64 = 1 << 10;
-    if bps >= MIB {
+    if bps >= GIB {
+        format!("{:.2} GB/s", bps as f64 / GIB as f64)
+    } else if bps >= MIB {
         format!("{:.2} MB/s", bps as f64 / MIB as f64)
     } else if bps >= KIB {
         format!("{:.2} KB/s", bps as f64 / KIB as f64)
@@ -72,10 +78,14 @@ pub fn format_eta(secs: i64) -> String {
         let m = secs / 60;
         let s = secs % 60;
         format!("{m}m {s}s")
-    } else {
+    } else if secs < 86400 {
         let h = secs / 3600;
         let m = (secs % 3600) / 60;
         format!("{h}h {m}m")
+    } else {
+        let d = secs / 86400;
+        let h = (secs % 86400) / 3600;
+        format!("{d}d {h}h")
     }
 }
 
@@ -130,6 +140,11 @@ mod tests {
     }
 
     #[test]
+    fn format_size_tib() {
+        assert_eq!(format_size(1 << 40), "1.00 TB");
+    }
+
+    #[test]
     fn format_size_negative_sentinel() {
         assert_eq!(format_size(-1), "—");
     }
@@ -152,6 +167,11 @@ mod tests {
     #[test]
     fn format_speed_mibps() {
         assert_eq!(format_speed(1 << 20), "1.00 MB/s");
+    }
+
+    #[test]
+    fn format_speed_gibps() {
+        assert_eq!(format_speed(1 << 30), "1.00 GB/s");
     }
 
     #[test]
@@ -179,5 +199,11 @@ mod tests {
     fn format_eta_hours() {
         assert_eq!(format_eta(3600), "1h 0m");
         assert_eq!(format_eta(7200), "2h 0m");
+    }
+
+    #[test]
+    fn format_eta_days() {
+        assert_eq!(format_eta(86411), "1d 0h");
+        assert_eq!(format_eta(172811), "2d 0h");
     }
 }

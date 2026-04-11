@@ -125,6 +125,18 @@ pub struct ConnectionProfile {
     /// Whether to enable the global seed-ratio limit on this profile.
     #[serde(default)]
     pub ratio_limit_enabled: bool,
+    /// Whether to limit concurrent downloads on this profile.
+    #[serde(default)]
+    pub download_queue_enabled: bool,
+    /// Max simultaneous downloads (only meaningful when `download_queue_enabled`).
+    #[serde(default)]
+    pub download_queue_size: u32,
+    /// Whether to limit concurrent seeds on this profile.
+    #[serde(default)]
+    pub seed_queue_enabled: bool,
+    /// Max simultaneous seeds (only meaningful when `seed_queue_enabled`).
+    #[serde(default)]
+    pub seed_queue_size: u32,
     /// The last N download directories used when adding a torrent to this daemon.
     /// Stored in FIFO order (index 0 = most recent). Capped at 5 entries.
     #[serde(default)]
@@ -149,6 +161,10 @@ impl ConnectionProfile {
             alt_speed_up: 0,
             ratio_limit: 0.0,
             ratio_limit_enabled: false,
+            download_queue_enabled: false,
+            download_queue_size: 0,
+            seed_queue_enabled: false,
+            seed_queue_size: 0,
             recent_download_paths: Vec::new(),
         }
     }

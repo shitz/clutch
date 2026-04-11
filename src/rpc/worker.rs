@@ -70,6 +70,22 @@ pub enum RpcWork {
         location: String,
         move_data: bool,
     },
+    QueueMoveTop {
+        params: ConnectionParams,
+        ids: Vec<i64>,
+    },
+    QueueMoveUp {
+        params: ConnectionParams,
+        ids: Vec<i64>,
+    },
+    QueueMoveDown {
+        params: ConnectionParams,
+        ids: Vec<i64>,
+    },
+    QueueMoveBottom {
+        params: ConnectionParams,
+        ids: Vec<i64>,
+    },
 }
 
 /// The typed outcome of one [`RpcWork`] item.
@@ -285,6 +301,42 @@ pub async fn execute_work(work: RpcWork) -> (Option<String>, RpcResult) {
                         move_data,
                     )
                     .await;
+                    (Some(new_id), RpcResult::ActionDone(r))
+                }
+                other => (None, RpcResult::ActionDone(other)),
+            }
+        }
+        RpcWork::QueueMoveTop { params: p, ids } => {
+            match api::queue_move_top(&p.url, &p.credentials, &p.session_id, &ids).await {
+                Err(RpcError::SessionRotated(new_id)) => {
+                    let r = api::queue_move_top(&p.url, &p.credentials, &new_id, &ids).await;
+                    (Some(new_id), RpcResult::ActionDone(r))
+                }
+                other => (None, RpcResult::ActionDone(other)),
+            }
+        }
+        RpcWork::QueueMoveUp { params: p, ids } => {
+            match api::queue_move_up(&p.url, &p.credentials, &p.session_id, &ids).await {
+                Err(RpcError::SessionRotated(new_id)) => {
+                    let r = api::queue_move_up(&p.url, &p.credentials, &new_id, &ids).await;
+                    (Some(new_id), RpcResult::ActionDone(r))
+                }
+                other => (None, RpcResult::ActionDone(other)),
+            }
+        }
+        RpcWork::QueueMoveDown { params: p, ids } => {
+            match api::queue_move_down(&p.url, &p.credentials, &p.session_id, &ids).await {
+                Err(RpcError::SessionRotated(new_id)) => {
+                    let r = api::queue_move_down(&p.url, &p.credentials, &new_id, &ids).await;
+                    (Some(new_id), RpcResult::ActionDone(r))
+                }
+                other => (None, RpcResult::ActionDone(other)),
+            }
+        }
+        RpcWork::QueueMoveBottom { params: p, ids } => {
+            match api::queue_move_bottom(&p.url, &p.credentials, &p.session_id, &ids).await {
+                Err(RpcError::SessionRotated(new_id)) => {
+                    let r = api::queue_move_bottom(&p.url, &p.credentials, &new_id, &ids).await;
                     (Some(new_id), RpcResult::ActionDone(r))
                 }
                 other => (None, RpcResult::ActionDone(other)),

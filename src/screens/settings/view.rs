@@ -520,11 +520,10 @@ impl SettingsScreen {
 
         let connection_card = container(
             column![
-                text("Connection Details")
-                    .size(13)
-                    .style(|t: &iced::Theme| iced::widget::text::Style {
-                        color: Some(t.palette().text.scale_alpha(0.5)),
-                    }),
+                text("Connection Details").size(16).font(iced::Font {
+                    weight: iced::font::Weight::Bold,
+                    ..iced::Font::DEFAULT
+                }),
                 form,
             ]
             .spacing(12),
@@ -666,7 +665,65 @@ impl SettingsScreen {
                 left: 16.0,
             });
 
-        let cards = column![connection_card, bandwidth_card]
+        // Queueing card ──────────────────────────────────────────────────────
+        let dl_queue_input = {
+            let inp = text_input("", &draft.download_queue_size)
+                .width(field_w)
+                .padding([12, 16])
+                .style(crate::theme::m3_text_input);
+            if draft.download_queue_enabled {
+                inp.on_input(Message::DraftDownloadQueueSizeChanged)
+            } else {
+                inp
+            }
+        };
+        let dl_queue_row = row![
+            toggler(draft.download_queue_enabled)
+                .on_toggle(Message::DraftDownloadQueueEnabledToggled)
+                .width(Length::Shrink),
+            tog_gap(),
+            text("Maximum active downloads").width(Length::Fill),
+            dl_queue_input,
+        ]
+        .align_y(Alignment::Center);
+
+        let seed_queue_input = {
+            let inp = text_input("", &draft.seed_queue_size)
+                .width(field_w)
+                .padding([12, 16])
+                .style(crate::theme::m3_text_input);
+            if draft.seed_queue_enabled {
+                inp.on_input(Message::DraftSeedQueueSizeChanged)
+            } else {
+                inp
+            }
+        };
+        let seed_queue_row = row![
+            toggler(draft.seed_queue_enabled)
+                .on_toggle(Message::DraftSeedQueueEnabledToggled)
+                .width(Length::Shrink),
+            tog_gap(),
+            text("Maximum active seeds").width(Length::Fill),
+            seed_queue_input,
+        ]
+        .align_y(Alignment::Center);
+
+        let queueing_card = container(
+            column![
+                text("Queueing").size(16).font(iced::Font {
+                    weight: iced::font::Weight::Bold,
+                    ..iced::Font::DEFAULT
+                }),
+                dl_queue_row,
+                seed_queue_row,
+            ]
+            .spacing(14),
+        )
+        .style(crate::theme::m3_card)
+        .padding(16)
+        .width(Length::Fill);
+
+        let cards = column![connection_card, bandwidth_card, queueing_card]
             .spacing(12)
             .padding([16, 16]);
 

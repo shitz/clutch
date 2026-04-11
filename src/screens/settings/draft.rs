@@ -53,6 +53,14 @@ pub struct ProfileDraft {
     pub ratio_limit: String,
     /// Whether to enable the global seed-ratio limit.
     pub ratio_limit_enabled: bool,
+    /// Whether to enable the download queue.
+    pub download_queue_enabled: bool,
+    /// Maximum number of active downloads — empty string means "not set" (0).
+    pub download_queue_size: String,
+    /// Whether to enable the seed queue.
+    pub seed_queue_enabled: bool,
+    /// Maximum number of active seeds — empty string means "not set" (0).
+    pub seed_queue_size: String,
 }
 
 /// Result of the last Test Connection probe.
@@ -104,6 +112,18 @@ impl ProfileDraft {
                 format!("{:.2}", profile.ratio_limit)
             },
             ratio_limit_enabled: profile.ratio_limit_enabled,
+            download_queue_enabled: profile.download_queue_enabled,
+            download_queue_size: if profile.download_queue_size == 0 {
+                String::new()
+            } else {
+                profile.download_queue_size.to_string()
+            },
+            seed_queue_enabled: profile.seed_queue_enabled,
+            seed_queue_size: if profile.seed_queue_size == 0 {
+                String::new()
+            } else {
+                profile.seed_queue_size.to_string()
+            },
         }
     }
 
@@ -128,6 +148,10 @@ impl ProfileDraft {
             alt_speed_up: String::new(),
             ratio_limit: String::new(),
             ratio_limit_enabled: false,
+            download_queue_enabled: false,
+            download_queue_size: String::new(),
+            seed_queue_enabled: false,
+            seed_queue_size: String::new(),
         }
     }
 
