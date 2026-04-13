@@ -53,6 +53,33 @@ While Clutch does not yet aim to replicate every niche feature of a 15-year-old 
 designed to handle the core remote management workflow flawlessly. It gives users a clean, secure,
 and resource-efficient way to control their seedboxes and home servers.
 
+### Clutch vs. TrguiNG
+
+If you are exploring modern Transmission clients, you have likely come across
+[TrguiNG](https://github.com/openscopeproject/TrguiNG), a feature-rich rewrite of Transgui built
+with Tauri and React. Clutch and TrguiNG solve the same core problem but take fundamentally
+different architectural approaches.
+
+**You should choose Clutch if:**
+
+- **UI performance is critical.** Clutch is written in pure Rust and renders directly via the GPU.
+  By completely bypassing HTML, CSS, and the browser DOM, it uses a fraction of the memory and
+  scrolls flawlessly under heavy load, even with thousands of torrents.
+- **You prefer a clean, Material 3 design.** Clutch is built from the ground up to feel like a
+  modern, uncluttered, and highly responsive desktop application.
+- **You want a simple, straightforward experience.** Clutch is highly opinionated. It intentionally
+  omits niche features to keep the core remote-management workflow simple and fast.
+- **You manage a single seedbox at a time.** By skipping multi-tabbed concurrent connections, Clutch
+  keeps its UI footprint and background network polling strictly focused and efficient.
+
+**You should choose TrguiNG if:**
+
+- **You need advanced features.** TrguiNG supports local torrent creation, label
+  management, and tracker management.
+- **You need concurrent multi-server management.** TrguiNG offers a multi-tabbed interface to
+  connect to several daemons simultaneously.
+- **You prefer a highly data-dense, enterprise-style UI.**
+
 ## Installation
 
 Pre-built installers are attached to every [GitHub
@@ -71,8 +98,8 @@ brew install --cask clutch
 ```
 
 **Gatekeeper workaround:** Because Clutch is unsigned, macOS will refuse to open it with an "app is
-damaged" error. To bypass this, run the following command in Terminal after dragging it to
-Applications:
+damaged" error. To bypass this, run the following command in Terminal after installing it via
+Homebrew:
 
 ```sh
 xattr -cr /Applications/Clutch.app
@@ -136,7 +163,7 @@ Clutch was developed using a heavily AI-assisted workflow:
 - Code review was performed by **Gemini 3.1 Pro** and the author.
 
 All OpenSpec artifacts (specs, changes, and archives) are included in this repository, so you can
-trace the design rationale for any feature.
+trace the design rationale for any feature and get a full specification for each implemented change.
 
 The architecture is documented in [system_architecture.md](system_architecture.md).
 

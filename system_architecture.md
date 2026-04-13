@@ -52,7 +52,9 @@ dirs::config_dir()/clutch/config.toml.
 
 - Passwords are encrypted directly inside the TOML file.
 - We use Argon2id for Key Derivation and ChaCha20-Poly1305 for AEAD encryption (src/crypto.rs).
-- The unlocked master passphrase is held in a secrecy::SecretString which automatically zeroizes its backing memory when dropped. Crypto operations are spawned on blocking threads to avoid stalling the UI.
+- The unlocked master passphrase is held in a secrecy::SecretString which automatically zeroizes its
+  backing memory when dropped. Crypto operations are spawned on blocking threads to avoid stalling
+  the UI.
 
 ## Client-Side Filtering
 
