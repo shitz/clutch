@@ -16,7 +16,8 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             formats: dmg
-          - os: ubuntu-latest
+          # Oldest still-supported Ubuntu LTS, so the AppImage/deb only require an old glibc
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             formats: appimage,deb
           - os: windows-latest
@@ -33,7 +34,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
@@ -64,7 +65,7 @@ jobs:
       # cargo-packager packs AppRun with mode 0744, so it cannot be executed by
       # users other than the owner. Repack the squashfs with world-readable/executable perms.
       - name: Fix AppImage permissions
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           set -euo pipefail
           for f in target/release/*.AppImage; do
@@ -97,6 +98,8 @@ jobs:
 
   create-release:
     name: Create release
+    # Manual runs only build the packages; releases are created from tags.
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     needs: build
     permissions:

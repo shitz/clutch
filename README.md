@@ -13,6 +13,8 @@
   <img src="assets/screenshot_settings_dark.png" alt="Settings" width="32%"/>
 </p>
 
+## Clutch — a modern desktop client for Transmission
+
 A modern, material design based desktop GUI for [Transmission](https://transmissionbt.com/) built in
 Rust using [iced](https://github.com/iced-rs/iced). Connects to a remote Transmission daemon via its
 JSON-RPC API.
