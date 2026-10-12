@@ -52,13 +52,37 @@ jobs:
             libasound2-dev \
             libudev-dev \
             libwayland-dev \
-            libvulkan-dev
+            libvulkan-dev \
+            squashfs-tools
 
       - name: Install cargo-packager
         run: cargo install cargo-packager --locked
 
       - name: Build and package
         run: cargo packager --release --formats ${{ matrix.formats }}
+
+      # cargo-packager packs AppRun with mode 0744, so it cannot be executed by
+      # users other than the owner. Repack the squashfs with world-readable/executable perms.
+      - name: Fix AppImage permissions
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -euo pipefail
+          for f in target/release/*.AppImage; do
+            chmod +x "$f"
+            offset=$("$f" --appimage-offset)
+            work=$(mktemp -d)
+            unsquashfs -q -n -d "$work/appdir" -o "$offset" "$f"
+            chmod -R u+rwX,go+rX,go-w "$work/appdir"
+            chmod 755 "$work/appdir/AppRun"
+            head -c "$offset" "$f" > "$work/out.AppImage"
+            mksquashfs "$work/appdir" "$work/fs.squashfs" \
+              -comp zstd -root-owned -noappend -no-xattrs -quiet
+            cat "$work/fs.squashfs" >> "$work/out.AppImage"
+            mv "$work/out.AppImage" "$f"
+            chmod +x "$f"
+            rm -rf "$work"
+            unsquashfs -o "$offset" -lls "$f" | grep ' squashfs-root/AppRun$'
+          done
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
