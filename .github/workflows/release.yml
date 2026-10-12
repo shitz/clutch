@@ -135,6 +135,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Release assets are named after the Cargo version, without the tag's "v" prefix.
+      - name: Determine version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       - name: Update Homebrew Cask
         uses: mislav/bump-homebrew-formula-action@v4
         with:
@@ -142,6 +147,6 @@ jobs:
           formula-path: Casks/clutch.rb
           homebrew-tap: shitz/homebrew-clutch
           base-branch: main
-          download-url: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/Clutch_${{ github.ref_name }}_aarch64.dmg
+          download-url: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/Clutch_${{ steps.version.outputs.version }}_aarch64.dmg
         env:
           COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
