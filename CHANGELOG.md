@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-10-12
+
+### Fixed
+
+- AppImage and `.deb`: Linux packages are now built on Ubuntu 22.04, so they run on distributions
+  with glibc 2.35 or newer instead of requiring glibc 2.39.
+
 ## [0.14.1] - 2026-10-12
 
 ### Fixed
