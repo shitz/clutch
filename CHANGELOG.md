@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-10-12
+
+### Fixed
+
+- AppImage: `AppRun` is now executable by all users. Previously it could only be run by the
+  file owner, which made the AppImage fail to start in sandboxes such as firejail.
+
 ## [0.14.0] - 2026-04-11
 
 ### Added
