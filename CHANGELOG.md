@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix a clippy warning that failed the build on CI.
+
 ## [0.14.1] - 2026-10-12
 
 ### Fixed

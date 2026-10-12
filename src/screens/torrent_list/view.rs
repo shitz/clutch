@@ -258,7 +258,7 @@ pub fn view(
                 ))
                 .width(Length::Fixed(180.0))
                 .content_fit(iced::ContentFit::ScaleDown)
-                .opacity(0.25),
+                .opacity(0.25_f32),
                 text("No torrents. Add one with +")
                     .size(14)
                     .style(|t: &iced::Theme| iced::widget::text::Style {
