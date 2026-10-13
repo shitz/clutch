@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-10-13
+
+### Fixed
+
+- Linux: Clutch no longer crashes on startup when the system tray cannot be created. It now runs
+  without a tray icon instead.
+- AppImage: bundle `libxkbcommon-x11` and the ayatana appindicator libraries, which are loaded at
+  runtime and were missing, so the AppImage starts on systems that do not have them installed.
+
 ## [0.14.2] - 2026-10-12
 
 ### Fixed
