@@ -45,4 +45,15 @@ formats = ["dmg", "nsis", "appimage", "deb"]
 before-packaging-command = "cargo build --release"
 
 [package.metadata.packager.appimage]
+# Libraries loaded at runtime via dlopen, which linuxdeploy does not detect:
+# xkbcommon-x11 (winit) and the ayatana appindicator stack (tray-icon).
+libs = [
+  "libxkbcommon-x11.so.0",
+  "libxcb-xkb.so.1",
+  "libayatana-appindicator3.so.1",
+  "libayatana-indicator3.so.7",
+  "libayatana-ido3-0.4.so.0",
+  "libdbusmenu-glib.so.4",
+  "libdbusmenu-gtk3.so.4",
+]
 files = { "assets/Clutch_Icon_512x512.png" = "usr/share/icons/hicolor/512x512/apps/Clutch.png" }

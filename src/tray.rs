@@ -121,6 +121,15 @@ impl std::fmt::Debug for TrayState {
 /// Returns `None` on failure (e.g. no libappindicator on Linux) after logging
 /// a warning. The app continues as a regular windowed app in that case.
 pub fn build() -> Option<TrayState> {
+    // On Linux, `libappindicator-sys` panics instead of returning an error
+    // when neither libayatana-appindicator3 nor libappindicator3 is installed.
+    std::panic::catch_unwind(try_build).unwrap_or_else(|_| {
+        tracing::warn!("Failed to create system tray icon: tray library unavailable");
+        None
+    })
+}
+
+fn try_build() -> Option<TrayState> {
     let icon = load_icon().or_else(|| {
         tracing::warn!("Could not decode tray icon — tray will show no icon");
         None
