@@ -26,6 +26,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tray-icon = { version = "0.21", default-features = false }
 uuid = { version = "1", features = ["v4", "serde"] }
 
+# The Linux tray backend needs GTK initialized and its main loop running (see src/tray.rs).
+# Same version as used by tray-icon's menu backend (muda).
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
 [dev-dependencies]
 wiremock = "0.6"
 tokio = { version = "1", features = ["full"] }

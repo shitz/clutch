@@ -832,6 +832,7 @@ dependencies = [
  "chacha20poly1305",
  "dark-light",
  "dirs 5.0.1",
+ "gtk",
  "iced",
  "iced_aw",
  "image",
