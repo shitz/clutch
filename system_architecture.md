@@ -72,6 +72,24 @@ collections, keeping the render hot path allocation-free on the per-torrent leve
 No additional RPC calls are needed; the daemon continues to return the full torrent list on every
 poll tick.
 
+## System Tray
+
+`tray.rs` owns the system tray icon and its context menu (built with `tray-icon`). Menu clicks
+reach `update()` as `Message::TrayAction` through a subscription that polls the global
+`MenuEvent` channel; `update()` changes the menu (speeds, connected state, turtle mode) only
+through the `TrayState` methods.
+
+- **macOS / Windows:** the tray is created on the main thread in `AppState::new()`, and
+  `TrayState` updates the menu items directly.
+- **Linux:** the backend (libappindicator + a GTK menu) needs an initialized GTK with a running
+  GTK main loop, which iced does not provide. The tray therefore lives on a dedicated
+  `clutch-tray` thread that initializes GTK, owns every tray object, and runs `gtk::main()`.
+  `TrayState` only holds a channel; the GTK thread applies the queued updates every 100 ms.
+
+If the tray cannot be created (no GTK, no appindicator library, or a panic in the backend),
+`tray::build()` returns `None` and the app runs without a tray. Closing the window then exits
+the app instead of hiding it.
+
 ## Directory Structure
 
 A quick map of where to find things:
@@ -89,6 +107,7 @@ src/
 │   ├── torrent_list/        # Torrent list (filters, toolbar, columns, dialogs, sort, add-torrent, update, worker)
 │   └── settings/            # Profile editing (state / draft / update / view)
 ├── auth/            # Passphrase setup and unlock flows (update / view)
+├── tray.rs          # System tray icon and menu (GTK thread on Linux)
 ├── crypto.rs        # Argon2id / ChaCha20-Poly1305 wrappers
 ├── profile.rs       # TOML storage and runtime configuration
 ├── theme.rs         # Public Material Design 3 theme facade

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.4] - 2026-10-14
+
+### Fixed
+
+- Linux: the system tray icon now works. GTK is initialized for the tray on its own thread, so the
+  tray no longer fails to start on every Linux system.
+- Closing the window when no system tray is available now exits Clutch instead of hiding the
+  window with no way to bring it back.
+
 ## [0.14.3] - 2026-10-13
 
 ### Fixed

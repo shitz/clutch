@@ -52,8 +52,8 @@ pub(super) fn handle_global_message(
             tracing::info!("Disconnecting; returning to connection launchpad");
             state.active_profile = None;
             if let Some(tray) = &state.tray {
-                tray.items.set_connected(false);
-                tray.items.reset_speeds();
+                tray.set_connected(false);
+                tray.reset_speeds();
             }
             Some(show_connection_launchpad(state))
         }
@@ -66,20 +66,14 @@ pub(super) fn handle_global_message(
             // session-set round-trip completes. SessionDataLoaded will confirm
             // (or correct) the state once the next poll arrives.
             if let Some(tray) = &state.tray {
-                tray.items
-                    .turtle_mode
-                    .set_text(if !state.alt_speed_enabled {
-                        "● Turtle Mode"
-                    } else {
-                        "○ Turtle Mode"
-                    });
+                tray.set_turtle_active(!state.alt_speed_enabled);
             }
             Some(toggle_turtle_mode(state))
         }
         Message::Main(main_screen::Message::SessionDataLoaded(data)) => {
             state.alt_speed_enabled = data.alt_speed_enabled;
             if let Some(tray) = &state.tray {
-                tray.items.set_turtle_active(data.alt_speed_enabled);
+                tray.set_turtle_active(data.alt_speed_enabled);
             }
             // Sync daemon-authoritative queue settings back into the active profile so
             // the settings screen always reflects what the daemon actually has.
@@ -130,17 +124,17 @@ pub(super) fn handle_global_message(
             if let Some(tray) = &state.tray {
                 let dl: i64 = torrents.iter().map(|t| t.rate_download).sum();
                 let ul: i64 = torrents.iter().map(|t| t.rate_upload).sum();
-                tray.items
-                    .speed_down
-                    .set_text(format!("↓  {}", crate::format::format_speed(dl)));
-                tray.items
-                    .speed_up
-                    .set_text(format!("↑  {}", crate::format::format_speed(ul)));
+                tray.set_speeds(dl, ul);
             }
             None
         }
-        // Hide the main window instead of exiting when the close button is clicked.
+        // Hide the main window instead of exiting when the close button is clicked,
+        // so the app keeps running in the tray. Without a tray there would be no way
+        // to bring the window back, so exit instead.
         Message::WindowCloseRequested(id) => {
+            if state.tray.is_none() {
+                return Some(iced::exit());
+            }
             state.main_window_id = Some(*id);
             Some(iced::window::set_mode(*id, iced::window::Mode::Hidden))
         }
@@ -214,8 +208,8 @@ pub(super) fn handle_connection_message(state: &mut AppState, message: Message) 
 
     state.alt_speed_enabled = success.alt_speed_enabled;
     if let Some(tray) = &state.tray {
-        tray.items.set_connected(true);
-        tray.items.set_turtle_active(success.alt_speed_enabled);
+        tray.set_connected(true);
+        tray.set_turtle_active(success.alt_speed_enabled);
     }
 
     if let Some(profile_id) = success.profile_id {
@@ -434,8 +428,8 @@ fn apply_auto_connect_result(
             tracing::info!(profile = %profile_name, "Auto-connect succeeded");
             state.alt_speed_enabled = info.alt_speed_enabled;
             if let Some(tray) = &state.tray {
-                tray.items.set_connected(true);
-                tray.items.set_turtle_active(info.alt_speed_enabled);
+                tray.set_connected(true);
+                tray.set_turtle_active(info.alt_speed_enabled);
             }
 
             // Sync daemon-authoritative queue settings into the profile.

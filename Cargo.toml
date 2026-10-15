@@ -1,6 +1,6 @@
 [package]
 name = "clutch"
-version = "0.14.3"
+version = "0.14.4"
 edition = "2024"
 
 [dependencies]
@@ -25,6 +25,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tray-icon = { version = "0.21", default-features = false }
 uuid = { version = "1", features = ["v4", "serde"] }
+
+# The Linux tray backend needs GTK initialized and its main loop running (see src/tray.rs).
+# Same version as used by tray-icon's menu backend (muda).
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
 
 [dev-dependencies]
 wiremock = "0.6"

@@ -17,8 +17,10 @@
 //! # Lifecycle
 //!
 //! `build()` is called from `AppState::new()` on the main OS thread (before the
-//! iced event loop starts). On failure (e.g. missing libappindicator on Linux)
-//! it returns `None` and the app continues without a tray.
+//! iced event loop starts). On macOS and Windows the tray is created right
+//! there; on Linux it is created on a dedicated GTK thread (see `gtk_thread`).
+//! On failure (e.g. missing libappindicator on Linux) it returns `None` and the
+//! app continues without a tray.
 //!
 //! # Event bridging
 //!
@@ -52,60 +54,119 @@ pub enum TrayAction {
     Exit,
 }
 
-/// Cloneable handles to the mutable tray menu items.
+/// A change to the tray menu requested by the iced `update()` loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TrayCommand {
+    SetConnected(bool),
+    SetTurtleActive(bool),
+    SetSpeeds { down: String, up: String },
+    ResetSpeeds,
+}
+
+/// Handles to the mutable tray menu items.
 ///
 /// Calling `.set_text()` or `.set_enabled()` on these updates the native OS
-/// menu immediately — no menu rebuild is required.
-pub struct TrayMenuItems {
-    pub speed_down: MenuItem,
-    pub speed_up: MenuItem,
-    pub resume: MenuItem,
-    pub pause: MenuItem,
+/// menu immediately — no menu rebuild is required. They must only be used on
+/// the thread that created the menu.
+struct TrayMenuItems {
+    speed_down: MenuItem,
+    speed_up: MenuItem,
+    resume: MenuItem,
+    pause: MenuItem,
     /// The turtle mode item uses a plain `MenuItem` (not `CheckMenuItem`) so
     /// that it sits in the same gutter column as every other item. The active
     /// state is signalled by swapping the label prefix between ● (on) and ○
     /// (off) — both glyphs have identical advance-widths in proportional fonts.
-    pub turtle_mode: MenuItem,
+    turtle_mode: MenuItem,
 }
 
 impl TrayMenuItems {
-    /// Enable or disable the daemon-dependent action items.
-    ///
-    /// Call with `true` immediately after a successful connect and `false`
-    /// after disconnect. The speed labels and Show / Exit items are unaffected.
-    pub fn set_connected(&self, connected: bool) {
-        self.resume.set_enabled(connected);
-        self.pause.set_enabled(connected);
-        self.turtle_mode.set_enabled(connected);
+    fn apply(&self, command: TrayCommand) {
+        match command {
+            // Only the daemon-dependent action items; the speed labels and
+            // Show / Exit items are unaffected.
+            TrayCommand::SetConnected(connected) => {
+                self.resume.set_enabled(connected);
+                self.pause.set_enabled(connected);
+                self.turtle_mode.set_enabled(connected);
+            }
+            TrayCommand::SetTurtleActive(active) => {
+                self.turtle_mode.set_text(turtle_label(active));
+            }
+            TrayCommand::SetSpeeds { down, up } => {
+                self.speed_down.set_text(down);
+                self.speed_up.set_text(up);
+            }
+            TrayCommand::ResetSpeeds => {
+                self.speed_down.set_text(SPEED_DOWN_IDLE);
+                self.speed_up.set_text(SPEED_UP_IDLE);
+            }
+        }
     }
+}
 
-    /// Update the turtle mode label to reflect the current active state.
-    ///
-    /// Uses ● (U+25CF) for on and ○ (U+25CB) for off; both are from the same
-    /// Unicode block and have identical advance-widths in proportional fonts,
-    /// so the "Turtle Mode" text never shifts position.
-    pub fn set_turtle_active(&self, active: bool) {
-        self.turtle_mode.set_text(if active {
-            "● Turtle Mode"
-        } else {
-            "○ Turtle Mode"
-        });
-    }
+const SPEED_DOWN_IDLE: &str = "↓  —";
+const SPEED_UP_IDLE: &str = "↑  —";
 
-    /// Reset the speed labels to the idle placeholder.
-    pub fn reset_speeds(&self) {
-        self.speed_down.set_text("↓  —");
-        self.speed_up.set_text("↑  —");
+/// Turtle mode menu label: ● (U+25CF) for on and ○ (U+25CB) for off.
+fn turtle_label(active: bool) -> &'static str {
+    if active {
+        "● Turtle Mode"
+    } else {
+        "○ Turtle Mode"
     }
 }
 
 /// System tray icon state.
 ///
-/// The `_icon` field owns the `TrayIcon` handle; dropping it destroys the OS
-/// tray icon, so this struct must be kept alive for the application lifetime.
+/// On macOS and Windows this owns the `TrayIcon` handle; dropping it destroys
+/// the OS tray icon, so this struct must be kept alive for the application
+/// lifetime. On Linux the tray lives on its own GTK thread (see [`gtk_thread`])
+/// and this struct only holds the channel used to update its menu.
 pub struct TrayState {
+    #[cfg(not(target_os = "linux"))]
     _icon: TrayIcon,
-    pub items: TrayMenuItems,
+    #[cfg(not(target_os = "linux"))]
+    items: TrayMenuItems,
+    #[cfg(target_os = "linux")]
+    commands: std::sync::mpsc::Sender<TrayCommand>,
+}
+
+impl TrayState {
+    /// Enable or disable the daemon-dependent action items.
+    ///
+    /// Call with `true` immediately after a successful connect and `false`
+    /// after disconnect.
+    pub fn set_connected(&self, connected: bool) {
+        self.send(TrayCommand::SetConnected(connected));
+    }
+
+    /// Update the turtle mode label to reflect the current active state.
+    pub fn set_turtle_active(&self, active: bool) {
+        self.send(TrayCommand::SetTurtleActive(active));
+    }
+
+    /// Show the aggregate download / upload rates (bytes per second).
+    pub fn set_speeds(&self, download: i64, upload: i64) {
+        self.send(TrayCommand::SetSpeeds {
+            down: format!("↓  {}", crate::format::format_speed(download)),
+            up: format!("↑  {}", crate::format::format_speed(upload)),
+        });
+    }
+
+    /// Reset the speed labels to the idle placeholder.
+    pub fn reset_speeds(&self) {
+        self.send(TrayCommand::ResetSpeeds);
+    }
+
+    fn send(&self, command: TrayCommand) {
+        #[cfg(not(target_os = "linux"))]
+        self.items.apply(command);
+        // A send only fails if the tray thread is gone, in which case there
+        // is no menu left to update.
+        #[cfg(target_os = "linux")]
+        let _ = self.commands.send(command);
+    }
 }
 
 impl std::fmt::Debug for TrayState {
@@ -121,31 +182,39 @@ impl std::fmt::Debug for TrayState {
 /// Returns `None` on failure (e.g. no libappindicator on Linux) after logging
 /// a warning. The app continues as a regular windowed app in that case.
 pub fn build() -> Option<TrayState> {
-    // On Linux, the tray backend panics instead of returning an error, e.g. when
-    // GTK is not initialized or no (ayatana-)appindicator3 library is installed.
+    #[cfg(target_os = "linux")]
+    return gtk_thread::spawn();
+
+    #[cfg(not(target_os = "linux"))]
+    build_on_current_thread().map(|(icon, items)| TrayState { _icon: icon, items })
+}
+
+/// Build the tray on the calling thread, which then owns all of its objects.
+fn build_on_current_thread() -> Option<(TrayIcon, TrayMenuItems)> {
+    // On Linux, the tray backend panics instead of returning an error, e.g.
+    // when no (ayatana-)appindicator3 library is installed.
     std::panic::catch_unwind(try_build).unwrap_or_else(|_| {
         tracing::warn!("Failed to create system tray icon: tray backend panicked");
         None
     })
 }
 
-fn try_build() -> Option<TrayState> {
+fn try_build() -> Option<(TrayIcon, TrayMenuItems)> {
     let icon = load_icon().or_else(|| {
         tracing::warn!("Could not decode tray icon — tray will show no icon");
         None
     });
 
     // Speed labels: disabled, updated on every torrent poll.
-    let speed_down = MenuItem::new("↓  —", false, None);
-    let speed_up = MenuItem::new("↑  —", false, None);
+    let speed_down = MenuItem::new(SPEED_DOWN_IDLE, false, None);
+    let speed_up = MenuItem::new(SPEED_UP_IDLE, false, None);
 
     // Action items — all plain MenuItems so every label sits in the same
     // gutter column with no OS-level checkmark offset.
     // resume / pause / turtle start DISABLED and are enabled after connect.
     let resume = MenuItem::with_id(ID_RESUME, "Resume All", false, None);
     let pause = MenuItem::with_id(ID_PAUSE, "Pause All", false, None);
-    // ○ = unchecked (turtle off). The ● / ○ pair has equal advance-widths.
-    let turtle_mode = MenuItem::with_id(ID_TURTLE, "○ Turtle Mode", false, None);
+    let turtle_mode = MenuItem::with_id(ID_TURTLE, turtle_label(false), false, None);
     let show = MenuItem::with_id(ID_SHOW, "Show Clutch", true, None);
     let exit = MenuItem::with_id(ID_EXIT, "Exit", true, None);
 
@@ -174,20 +243,92 @@ fn try_build() -> Option<TrayState> {
     }
 
     match builder.build() {
-        Ok(tray_icon) => Some(TrayState {
-            _icon: tray_icon,
-            items: TrayMenuItems {
+        Ok(tray_icon) => Some((
+            tray_icon,
+            TrayMenuItems {
                 speed_down,
                 speed_up,
                 resume,
                 pause,
                 turtle_mode,
             },
-        }),
+        )),
         Err(e) => {
             tracing::warn!("Failed to create system tray icon: {e}");
             None
         }
+    }
+}
+
+/// The Linux tray backend (libappindicator + a GTK menu) needs an initialized
+/// GTK with a running GTK main loop, which iced (winit) does not provide. As
+/// recommended by `tray-icon`, the tray therefore lives on a dedicated thread
+/// that initializes GTK, owns every tray object and runs `gtk::main()`. Menu
+/// updates reach it as [`TrayCommand`]s over a channel; menu clicks still
+/// arrive through the global `MenuEvent` channel polled by [`subscription`].
+#[cfg(target_os = "linux")]
+mod gtk_thread {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use gtk::glib;
+
+    use super::{TrayCommand, TrayState, build_on_current_thread};
+
+    /// How often the GTK thread applies pending menu updates.
+    const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(100);
+    /// How long app startup waits for the tray thread to report back.
+    const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+    pub(super) fn spawn() -> Option<TrayState> {
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let (commands_tx, commands_rx) = mpsc::channel();
+        if let Err(e) = std::thread::Builder::new()
+            .name("clutch-tray".into())
+            .spawn(move || run(ready_tx, commands_rx))
+        {
+            tracing::warn!("Failed to spawn the system tray thread: {e}");
+            return None;
+        }
+        match ready_rx.recv_timeout(STARTUP_TIMEOUT) {
+            Ok(true) => Some(TrayState {
+                commands: commands_tx,
+            }),
+            Ok(false) => None,
+            Err(_) => {
+                tracing::warn!("Timed out waiting for the system tray to start");
+                None
+            }
+        }
+    }
+
+    fn run(ready: mpsc::SyncSender<bool>, commands: mpsc::Receiver<TrayCommand>) {
+        if let Err(e) = gtk::init() {
+            tracing::warn!("Failed to initialize GTK for the system tray: {e}");
+            let _ = ready.send(false);
+            return;
+        }
+        let Some((icon, items)) = build_on_current_thread() else {
+            let _ = ready.send(false);
+            return;
+        };
+        let _ = ready.send(true);
+
+        glib::timeout_add_local(COMMAND_POLL_INTERVAL, move || {
+            // Keep the tray icon alive for as long as the main loop runs.
+            let _ = &icon;
+            loop {
+                match commands.try_recv() {
+                    Ok(command) => items.apply(command),
+                    Err(mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        gtk::main_quit();
+                        return glib::ControlFlow::Break;
+                    }
+                }
+            }
+        });
+        gtk::main();
     }
 }
 
